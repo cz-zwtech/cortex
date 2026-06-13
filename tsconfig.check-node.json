@@ -1,0 +1,19 @@
+// Type-check coverage for the Node side (server/ + bin/), which the root
+// tsconfig (include: ["src"]) and tsconfig.node.json (vite.config.ts only) do
+// NOT cover. These run under tsx (transpile-only) at runtime, so without this
+// config their type errors only ever surfaced at runtime. Wired into
+// `npm run check` / `npm run typecheck`.
+//
+// Differs from the root config: Node libs/types instead of DOM + vite/client.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "lib": ["ES2022"],
+    "types": ["node"],
+    "jsx": "react-jsx",
+    "noEmit": true
+  },
+  "include": ["server", "bin"],
+  "exclude": ["node_modules", "server/codegraph"]
+}
