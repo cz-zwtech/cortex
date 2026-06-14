@@ -30,12 +30,11 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import Anthropic from '@anthropic-ai/sdk'
 import { resolveAnthropicKey } from './_anthropic-key.js'
-import { resolveSelfSessionId } from './_session-id.js'
+import { projectDirForSession, resolveSelfSessionId } from './_session-id.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const PROJECTS_ROOT = path.join(os.homedir(), '.claude', 'projects')
 const COUNTER_PATH = path.join(os.homedir(), '.config', 'ckn', 'auto-name-counter.json')
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
 const execFileP = promisify(execFile)
@@ -70,8 +69,6 @@ const parseArgs = (): Args => {
   }
   return out
 }
-
-const encodeProj = (cwd: string): string => cwd.replace(/[/\\:]/g, '-')
 
 const todayDate = (): string => new Date().toISOString().slice(0, 10)
 
@@ -160,8 +157,10 @@ const firstUserPrompt = async (jsonlPath: string): Promise<string | null> => {
  * birthtime is unavailable, e.g. WSL/ext4). Best-effort — never throws. Usually
  * empty at a fresh session's start (ckn-extract writes memories at SessionEnd).
  */
-const sessionMemorySlugs = async (cwd: string, jsonlPath: string): Promise<string[]> => {
-  const memDir = path.join(PROJECTS_ROOT, encodeProj(cwd), 'memory')
+const sessionMemorySlugs = async (jsonlPath: string): Promise<string[]> => {
+  // Co-located with the (resolver-correct) transcript so a subdir cwd reads the
+  // real project's memories, not an empty encode(subdir) dir.
+  const memDir = path.join(path.dirname(jsonlPath), 'memory')
   let sessionStart = 0
   try {
     const st = await fsp.stat(jsonlPath)
@@ -268,7 +267,7 @@ const deriveAutoName = async (sid: string, cwd: string): Promise<string> => {
   const jsonlPath = resolveJsonlPath(sid, cwd)
   const [prompt, memorySlugs, gitTitles] = await Promise.all([
     firstUserPrompt(jsonlPath),
-    sessionMemorySlugs(cwd, jsonlPath),
+    sessionMemorySlugs(jsonlPath),
     sessionGitTitles(cwd, jsonlPath),
   ])
 
@@ -286,7 +285,7 @@ const deriveAutoName = async (sid: string, cwd: string): Promise<string> => {
 }
 
 const resolveJsonlPath = (sid: string, cwd: string): string =>
-  path.join(PROJECTS_ROOT, encodeProj(cwd), `${sid}.jsonl`)
+  path.join(projectDirForSession(sid, cwd), `${sid}.jsonl`)
 
 /**
  * Append a `custom-title` event to the JSONL. Matches Claude Code's own

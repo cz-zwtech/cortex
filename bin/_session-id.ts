@@ -165,14 +165,67 @@ export function resolveSelfSessionId(opts: SelfIdOpts = {}): SelfIdResult {
 }
 
 /**
+ * Encode a filesystem path the way Claude Code names its `~/.claude/projects/`
+ * dirs. SINGLE SOURCE OF TRUTH for the transcript-resolution path. Legacy
+ * storage-KEY encoders (graph ids/scopes, pattern files, write-dirs) keep their
+ * own byte-identical local copies on purpose — rekeying existing nodes would be
+ * a behavior change, and those sites don't resolve a transcript.
+ */
+export const encodeProjectPath = (p: string): string => p.replace(/[/\\:]/g, '-')
+
+/**
+ * The project dir for a cwd when NO session id is known — the pre-transcript
+ * write-path heuristic. Walk DEEPEST-FIRST from cwd up its ancestors and return
+ * the first whose `<projectsRoot>/<enc>` dir already exists (most-specific root
+ * wins, deterministically: a subdir beats its parent when both exist). Falls
+ * back to encoding the raw cwd when no ancestor dir exists (a brand-new project;
+ * a later mkdir by the caller creates it).
+ */
+export function projectDirForCwd(cwd: string, projectsRoot?: string): string {
+  const root = projectsRoot ?? projectsRootDefault()
+  let p = cwd
+  while (p && p !== '/' && p.length > 1) {
+    const dir = path.join(root, encodeProjectPath(p))
+    try {
+      if (fsSync.statSync(dir).isDirectory()) return dir
+    } catch {
+      /* not this ancestor — keep walking up */
+    }
+    const i = p.lastIndexOf('/')
+    if (i <= 0) break
+    p = p.slice(0, i)
+  }
+  return path.join(root, encodeProjectPath(cwd))
+}
+
+/**
+ * Canonical resolver for the project dir that holds a session's transcript —
+ * the cure for the hand-rolled-`encode(cwd)` bug (see file header). Ordered:
+ *   1. glob-by-sid: the dir that actually CONTAINS `<sessionId>.jsonl`,
+ *      AUTHORITATIVE — beats any same-named encoded-cwd dir (the subdir-cwd
+ *      repro). Reuses scanTranscripts (the enumeration resolveSelfSessionId
+ *      uses), so it is same-machine + phantom-excluded by construction.
+ *   2. no transcript yet → projectDirForCwd (deepest existing ancestor dir).
+ *   3. raw-encode the cwd (folded into projectDirForCwd's fallback).
+ * Transcript-resolution sites derive `<sid>.jsonl` / `memory/` from this dir
+ * instead of trusting `encode(cwd)`.
+ */
+export function projectDirForSession(sessionId: string, cwd: string, projectsRoot?: string): string {
+  const root = projectsRoot ?? projectsRootDefault()
+  for (const t of scanTranscripts(root)) {
+    if (t.id === sessionId) return path.dirname(t.filePath)
+  }
+  return projectDirForCwd(cwd, root)
+}
+
+/**
  * Back-compat shim: the "current" session id for a cwd. Prefer
  * `resolveSelfSessionId` (transcript-first, globs all dirs, validates stamps).
  * This narrower form is kept for callers that only have a cwd: newest validated
  * transcript under that cwd's project dir, else the global transcript resolver.
  */
 export const resolveCurrentSession = async (cwd: string): Promise<string | null> => {
-  const enc = cwd.replace(/[/\\:]/g, '-')
-  const dir = path.join(os.homedir(), '.claude', 'projects', enc)
+  const dir = projectDirForCwd(cwd)
   try {
     const local = fsSync
       .readdirSync(dir)

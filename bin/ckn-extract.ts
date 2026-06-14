@@ -36,6 +36,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { resolveAnthropicKey } from './_anthropic-key.js'
 import { getMachineId } from '../server/privateMind.js'
 import { SERVER_URL } from './_graph-guard.js'
+import { projectDirForSession } from './_session-id.js'
 import {
   type ProfileFacetCandidate,
   FACET_SYSTEM_PROMPT,
@@ -575,7 +576,9 @@ const updateSessionEntry = async (
   const encProj = encodeProjectDir(cwd)
   const memDir = path.join(os.homedir(), '.claude', 'projects', encProj, 'memory')
   const file = path.join(memDir, `session-${sessionId}.md`)
-  const jsonlPath = path.join(os.homedir(), '.claude', 'projects', encProj, `${sessionId}.jsonl`)
+  // Transcript READ path resolves to the dir that actually holds <sid>.jsonl
+  // (subdir-cwd safe); encProj above stays the storage key for memDir/id/scope.
+  const jsonlPath = path.join(projectDirForSession(sessionId, cwd), `${sessionId}.jsonl`)
 
   let existing: ExistingSessionFm = { body: '' }
   if (fsSync.existsSync(file)) {
@@ -1086,8 +1089,7 @@ const backfillMode = async (limit: number): Promise<void> => {
 }
 
 const sessionMode = async (projectDir: string, sessionId: string): Promise<void> => {
-  const encProj = encodeProjectDir(projectDir)
-  const transcriptPath = path.join(os.homedir(), '.claude', 'projects', encProj, `${sessionId}.jsonl`)
+  const transcriptPath = path.join(projectDirForSession(sessionId, projectDir), `${sessionId}.jsonl`)
   if (!fsSync.existsSync(transcriptPath)) {
     console.error(`[ckn extract] no transcript at ${transcriptPath}`)
     process.exit(1)

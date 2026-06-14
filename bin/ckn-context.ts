@@ -34,7 +34,7 @@ import { readCodegraphCache, CODEGRAPH_CACHE_TTL_MS } from '../server/codegraphC
 import { resolveGraphedRepo } from './_codegraph-aware.js'
 import { readGitProvenance } from '../server/git/provenance.js'
 import { syncEngagementBlock } from './ckn-engagement.js'
-import { resolveSelfSessionId } from './_session-id.js'
+import { projectDirForSession, resolveSelfSessionId } from './_session-id.js'
 
 const SERVER_URL = 'http://localhost:3001'
 const TIMEOUT_MS = 5_000
@@ -158,8 +158,7 @@ export function renderHookOutput(eventName: string, markdown: string): string | 
  */
 const readCurrentTopic = async (sid: string, cwd: string): Promise<string | null> => {
   if (!sid || !cwd) return null
-  const enc = cwd.replace(/[/\\:]/g, '-')
-  const jsonl = path.join(os.homedir(), '.claude', 'projects', enc, `${sid}.jsonl`)
+  const jsonl = path.join(projectDirForSession(sid, cwd), `${sid}.jsonl`)
   let raw: string
   try {
     raw = await fsp.readFile(jsonl, 'utf-8')
