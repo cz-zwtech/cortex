@@ -74,7 +74,14 @@ export interface WatchLineMessage {
  *   node `origin`); unverified → surface-only, and it leaks NO origin (untrusted).
  * Absent `trust` (older surface) derives fail-safe: mesh iff meshVerified, else
  * unverified — never `local` (proving local needs this node's id, server-side).
+ *
+ * The message `id` is also FRONT-LOADED (ahead of who/body, not trailing) so a
+ * notification-line truncation can't strip it — a clipped preview still names the
+ * message to look up. A body past PREVIEW_CLIP_AT is likely to be display-clipped,
+ * so it gets a `full: ckn-bus inbox --all` pointer (also ahead of the body) telling
+ * the reader the preview is partial and how to read the whole thing.
  */
+export const PREVIEW_CLIP_AT = 240
 export function formatBusLine(m: WatchLineMessage): string {
   const who = m.fromName || m.fromSession.slice(0, 8)
   const trust = m.trust ?? (m.meshVerified ? 'mesh' : 'unverified')
@@ -82,7 +89,8 @@ export function formatBusLine(m: WatchLineMessage): string {
   // `human` marks humanProvenance: with a trusted source it = the human's DIRECT
   // instruction (front-loaded with trust so truncation can't strip it).
   const human = m.humanProvenance ? ' human' : ''
-  return `[bus ${tag}${human}] ${who} → ${m.to}: ${m.body} (id ${m.id})`
+  const full = m.body.length > PREVIEW_CLIP_AT ? ' (full: ckn-bus inbox --all)' : ''
+  return `[bus ${tag}${human}] (id ${m.id})${full} ${who} → ${m.to}: ${m.body}`
 }
 
 // ── bounded liveness heartbeat ────────────────────────────────────────────────

@@ -72,5 +72,23 @@ assert.match(hpMesh, /^\[bus trust=mesh origin=zw1 human\]/, 'mesh + human keeps
 const noHp = formatBusLine({ id: 'm_7', fromSession: 's', to: 'me', body: 'z', trust: 'local' })
 assert.ok(!noHp.includes('human'), 'no humanProvenance → no human tag (agent-originated)')
 
+// ── the id + a 'full' pointer survive notification-line truncation ──
+// The notification preview is display-capped (the harness clips a long line), so the
+// id is front-loaded (ahead of who/body) — a clipped preview still names the message
+// to look up — and a LONG body adds a `full: ckn-bus inbox --all` pointer, also ahead
+// of the body, so the reader knows the preview is clipped and how to read the whole thing.
+const short = formatBusLine({ id: 'm_s', fromName: 'PM', fromSession: 's', to: 'me', body: 'ok', trust: 'local' })
+assert.ok(short.indexOf('(id m_s)') < short.indexOf('PM →'), 'id is front-loaded (precedes who/body)')
+assert.ok(!short.includes('inbox --all'), 'a short body gets no full-pointer (no noise)')
+
+const longBody = 'x'.repeat(400)
+const long = formatBusLine({ id: 'm_l', fromName: 'PM', fromSession: 's', to: 'me', body: longBody, trust: 'local' })
+assert.match(long, /full: ckn-bus inbox --all/, 'a long body adds the full-message pointer')
+assert.ok(
+  long.indexOf('full: ckn-bus inbox --all') < long.indexOf(longBody),
+  'the pointer precedes the (clippable) body',
+)
+assert.ok(long.indexOf('(id m_l)') < long.indexOf(longBody), 'the id also precedes the body')
+
 console.log('watch-line-format OK')
 process.exit(0)
