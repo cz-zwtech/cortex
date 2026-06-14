@@ -12,7 +12,7 @@ import { localTranscriptIds } from '../../bin/_session-id.js'
 import { emitBusMessage, emitBusState } from '../bus/busEvents.js'
 import {
   resolveFriendlyName,
-  shouldRebind,
+  supersedeScan,
   mintMetaId,
   aliasSetFor,
   selfIdSet,
@@ -119,37 +119,8 @@ export async function registerSession(input: RegisterInput): Promise<SessionPres
   const now = Date.now()
 
   return transaction(() => {
-    // Rebind/supersede scan operates on the PRE-floor resolved `friendlyName` (the bare-id
-    // fallback in the floored no-title case), and runs BEFORE priorRow + the name-floor
-    // below are computed. Intentional + unchanged from HEAD: the floored/preserved name is
-    // NOT collision-scanned here. Scanning on the effective (preserved) name would interact
-    // with shouldRebind's both-transcripts / peer-race semantics, so it is deliberately
-    // deferred out of this name-floor fix — tracked as a follow-up FR.
-    let supersedes = ''
-    if (friendlyName && input.cwd) {
-      const priors = all<{ id: string }>(
-        `SELECT id FROM session_meta WHERE friendly_name = ? AND cwd = ? AND id <> ? AND status = 'live'`,
-        friendlyName,
-        input.cwd,
-        input.sessionId,
-      )
-      // Transcript existence breaks name ties: a transcript-backed row wins, so a
-      // bootstrap PHANTOM (no transcript) can't sign off the real session. Scan
-      // only on an actual collision (priors present) to keep registration cheap.
-      const tx = priors.length ? localTranscriptIds() : new Set<string>()
-      for (const p of priors) {
-        if (
-          shouldRebind(
-            { friendlyName, cwd: input.cwd, sessionId: input.sessionId, hasTranscript: tx.has(input.sessionId) },
-            { friendlyName, cwd: input.cwd, sessionId: p.id, status: 'live', hasTranscript: tx.has(p.id) },
-          )
-        ) {
-          run(`UPDATE session_meta SET status = 'signed_off' WHERE id = ?`, p.id)
-          supersedes = p.id
-        }
-      }
-    }
-
+    // Supersede scan runs AFTER priorRow + the name-floor below, on the EFFECTIVE
+    // (post-floor) name — see the scan after effectiveName/effectiveTitle.
     const priorRow = get<{ meta_id?: string; friendly_name?: string; title?: string; name_history?: string }>(
       `SELECT meta_id, friendly_name, title, name_history FROM session_meta WHERE id = ?`,
       input.sessionId,
@@ -174,6 +145,35 @@ export async function registerSession(input: RegisterInput): Promise<SessionPres
     const floorName = exists && namelessInput && !!priorFriendly && !priorIsBare
     const effectiveName = floorName ? priorFriendly : friendlyName
     const effectiveTitle = floorName ? String(priorRow?.title ?? '') : (input.title ?? '')
+
+    // Supersede scan on the EFFECTIVE (post-floor) name so a floored post-compact
+    // re-register signs off its stale real-name twin (not the bare id). Fetch the
+    // collision set by name+cwd+live; supersedeScan applies same-machine scope +
+    // the phantom guard (a transcript-less incoming can't sign off a real prior).
+    let supersedes = ''
+    if (effectiveName && input.cwd) {
+      const priors = all<{ id: string; machine: string | null }>(
+        `SELECT id, machine FROM session_meta WHERE friendly_name = ? AND cwd = ? AND id <> ? AND status = 'live'`,
+        effectiveName,
+        input.cwd,
+        input.sessionId,
+      )
+      const tx = priors.length ? localTranscriptIds() : new Set<string>()
+      const toSignOff = supersedeScan(
+        {
+          effectiveName,
+          cwd: input.cwd,
+          sessionId: input.sessionId,
+          machine: input.machine,
+          hasTranscript: tx.has(input.sessionId),
+        },
+        priors.map((p) => ({ id: p.id, machine: p.machine, hasTranscript: tx.has(p.id) })),
+      )
+      for (const id of toSignOff) {
+        run(`UPDATE session_meta SET status = 'signed_off' WHERE id = ?`, id)
+        supersedes = id
+      }
+    }
 
     // Claim a durable metaId (order: keep existing → reclaim by title → reclaim
     // by cwd → mint). Resume keeps the same sessionId, so an existing row keeps

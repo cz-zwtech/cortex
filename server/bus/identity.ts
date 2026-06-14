@@ -170,3 +170,59 @@ export const shouldRebind = (
   incoming.sessionId !== prior.sessionId &&
   prior.status === 'live' &&
   !(prior.hasTranscript === true && incoming.hasTranscript === false)
+
+/** Same-machine scope for supersede: a register on machine A must never sign off
+ *  a machine-B live session (the mesh resolves cross-machine identity by metaId,
+ *  not by signing each other off). An UNSTAMPED prior — machine '' (the
+ *  session_meta.machine column default) or NULL (legacy) — is treated as
+ *  same-machine so a pre-stamp stale row still gets cleaned. ACCEPTED RESIDUAL:
+ *  the wildcard also lets a local register sign off an unstamped REMOTE legacy
+ *  row; rare (unstamped AND status=live), and drained as rows get a machine stamp
+ *  on every write going forward. */
+const sameMachineScope = (
+  incomingMachine: string | null | undefined,
+  priorMachine: string | null | undefined,
+): boolean => {
+  const pm = (priorMachine ?? '').trim()
+  return pm === '' || pm === (incomingMachine ?? '').trim()
+}
+
+/**
+ * Which prior live rows (already fetched by the SAME effective friendly_name +
+ * cwd) an incoming register supersedes. registerSession passes the EFFECTIVE
+ * (post-floor) name, so a floored post-compact session supersedes its stale
+ * real-name twin (the #86 fix) instead of scanning the bare id and missing it.
+ * Same-machine scoped (sameMachineScope) and gated by shouldRebind (so a phantom
+ * cannot sign off a real, transcript-backed prior). Pure: the caller does the
+ * name+cwd+live SQL fetch and the row writes.
+ */
+export const supersedeScan = (
+  incoming: {
+    effectiveName: string
+    cwd: string
+    sessionId: string
+    machine?: string | null
+    hasTranscript?: boolean
+  },
+  priors: Array<{ id: string; machine?: string | null; hasTranscript?: boolean }>,
+): string[] =>
+  priors
+    .filter((p) => sameMachineScope(incoming.machine, p.machine))
+    .filter((p) =>
+      shouldRebind(
+        {
+          friendlyName: incoming.effectiveName,
+          cwd: incoming.cwd,
+          sessionId: incoming.sessionId,
+          hasTranscript: incoming.hasTranscript,
+        },
+        {
+          friendlyName: incoming.effectiveName,
+          cwd: incoming.cwd,
+          sessionId: p.id,
+          status: 'live',
+          hasTranscript: p.hasTranscript,
+        },
+      ),
+    )
+    .map((p) => p.id)
