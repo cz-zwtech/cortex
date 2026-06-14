@@ -106,7 +106,11 @@ CREATE TABLE IF NOT EXISTS thread_claims (
   thread_id   TEXT NOT NULL,
   session_id  TEXT NOT NULL,
   claimed_at  INTEGER NOT NULL DEFAULT 0,
-  released_at INTEGER NOT NULL DEFAULT 0
+  released_at INTEGER NOT NULL DEFAULT 0,
+  -- mode-on-claim (#89): the live claim's work mode for PostCompact resume —
+  -- 'working' | 'quiesced' | 'waiting-on:<predicate>'. Attribute of the OPEN
+  -- claim (dies at release); re-evaluated from ground truth on resume.
+  mode        TEXT NOT NULL DEFAULT 'working'
 );
 CREATE INDEX IF NOT EXISTS idx_thread_claims_thread ON thread_claims(thread_id);
 

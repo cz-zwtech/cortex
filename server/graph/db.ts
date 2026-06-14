@@ -46,6 +46,7 @@ export function initSchema(db: Database.Database): void {
   ensureMandateColumns(db)
   ensureProfileSourceColumn(db)
   ensureProvenanceColumn(db)
+  ensureClaimModeColumn(db)
   const ddl = fs.readFileSync(SCHEMA_PATH, 'utf8')
   db.exec(ddl)
 }
@@ -79,6 +80,21 @@ function ensureProvenanceColumn(db: Database.Database): void {
   // memory's lastAt drifts past lastEdit → false negatives). Migrated while the live
   // SURFACED_IN corpus is still 0, so firstAt is exact from the first live row.
   if (!cols.has('firstAt')) db.exec(`ALTER TABLE edges ADD COLUMN firstAt INTEGER DEFAULT 0`)
+}
+
+/**
+ * Additive `mode` column on a PRE-existing `thread_claims` table (mode-on-claim, #89):
+ * the live claim's PostCompact work mode (working | quiesced | waiting-on:<predicate>).
+ * Legacy rows default to 'working' = resumable, which is the safe pre-feature behavior.
+ * No-op on a fresh DB (the DDL makes the final shape). Mirrors ensureProvenanceColumn.
+ */
+function ensureClaimModeColumn(db: Database.Database): void {
+  const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='thread_claims'").get()
+  if (!exists) return
+  const cols = new Set(
+    (db.prepare('PRAGMA table_info(thread_claims)').all() as Array<{ name: string }>).map((c) => c.name),
+  )
+  if (!cols.has('mode')) db.exec(`ALTER TABLE thread_claims ADD COLUMN mode TEXT NOT NULL DEFAULT 'working'`)
 }
 
 function ensureMandateColumns(db: Database.Database): void {

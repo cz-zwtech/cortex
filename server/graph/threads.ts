@@ -186,6 +186,30 @@ export const releaseThread = (threadId: string, sessionId: string, now: number):
   )
 }
 
+/** Set the work mode on this session's OPEN claim of a thread (mode-on-claim, #89):
+ *  'working' | 'quiesced' | 'waiting-on:<predicate>'. No-op without an open claim. */
+export const setClaimMode = (threadId: string, sessionId: string, mode: string): void => {
+  if (!threadId || !sessionId || !mode) return
+  run(
+    `UPDATE thread_claims SET mode = ? WHERE thread_id = ? AND session_id = ? AND released_at = 0`,
+    mode,
+    threadId,
+    sessionId,
+  )
+}
+
+/** This session's OPEN claim (most recent) + its mode — the PostCompact resume read. */
+export const getOpenClaimForSession = (
+  sessionId: string,
+): { threadId: string; mode: string } | null => {
+  if (!sessionId) return null
+  const row = get<{ thread_id: string; mode: string }>(
+    `SELECT thread_id, mode FROM thread_claims WHERE session_id = ? AND released_at = 0 ORDER BY claimed_at DESC LIMIT 1`,
+    sessionId,
+  )
+  return row ? { threadId: row.thread_id, mode: row.mode } : null
+}
+
 /** Compute a thread's claim state for `mySessionId`. The open claim only counts
  *  while its session is present (live | idle); a stale/signed-off claimer — or a
  *  vanished one — lapses the claim back to pending. */

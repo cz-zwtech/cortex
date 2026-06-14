@@ -219,7 +219,30 @@ const main = async () => {
     return
   }
 
-  die(`unknown command '${cmd}' — use list | resumable | resume [<id>] | handoff <id> | hydrate <id>.`)
+  if (cmd === 'mode') {
+    // mode-on-claim (#89): declare the work mode on this session's open claim AT the
+    // transition, so PostCompact can re-evaluate whether resume is safe.
+    const ref = process.argv[3] && !process.argv[3].startsWith('--') ? process.argv[3] : undefined
+    const mode = process.argv[4]
+    if (!ref || !mode)
+      die(
+        'mode: usage — mode <thread> <working|quiesced|waiting-on:thread=<id>:status=<x>|waiting-on:bus=<msgid>>',
+      )
+    if (!(await isServerUp())) die('mode needs the Cortex server — start it with ckn-start.')
+    const r = await fetch(`${SERVER_URL}/api/graph/threads/${encodeURIComponent(ref!)}/mode`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session, mode }),
+    })
+    if (r.status === 404) die(`no thread '${ref}'.`)
+    if (!r.ok) die(`POST mode -> ${r.status} ${await r.text()}`)
+    console.log(`MODE ${ref} → ${mode}`)
+    return
+  }
+
+  die(
+    `unknown command '${cmd}' — use list | resumable | resume [<id>] | handoff <id> | hydrate <id> | mode <id> <mode>.`,
+  )
 }
 
 main().catch((e) => die(e?.message ?? String(e)))

@@ -52,7 +52,18 @@ import {
   claimThread,
   releaseThread,
   threadClaimState,
+  setClaimMode,
+  getOpenClaimForSession,
+  getThread,
 } from '../graph/threads.js'
+import { hasReplyTo } from '../graph/bus.js'
+import {
+  resumeDecision,
+  parseWaitingOn,
+  evalThreadPredicate,
+  evalBusPredicate,
+  type PredEval,
+} from '../graph/resumeState.js'
 
 export const graphRouter = Router()
 
@@ -167,6 +178,54 @@ graphRouter.post('/threads/:id/release', (req, res) => {
     const now = Date.now()
     releaseThread(thread.id, sid, now)
     res.json({ thread, claimState: threadClaimState(thread.id, sid, now) })
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message ?? String(e) })
+  }
+})
+
+// POST /api/graph/threads/:id/mode — set the work mode on this session's OPEN claim
+// (mode-on-claim, #89). Body { session, mode }. The session declares its mode AT the
+// transition (starts waiting / resumes / quiesces) so PostCompact can re-evaluate it.
+graphRouter.post('/threads/:id/mode', (req, res) => {
+  try {
+    const { session, mode } = (req.body ?? {}) as { session?: unknown; mode?: unknown }
+    const sid = typeof session === 'string' ? session : ''
+    const m = typeof mode === 'string' ? mode : ''
+    if (!sid || !m) return res.status(400).json({ error: 'session and mode required' })
+    const thread = resolveThreadRef(req.params.id)
+    if (!thread) return res.status(404).json({ error: `no thread ${req.params.id}` })
+    setClaimMode(thread.id, sid, m)
+    res.json({ thread: thread.id, mode: m })
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message ?? String(e) })
+  }
+})
+
+// GET /api/graph/resume-state?session=<id> — PostCompact resume verdict (#89). Restores the
+// mandate (the session's open claim) but RE-EVALUATES a waiting-on predicate from ground
+// truth; anything missing / unparseable / unknowable → ambiguous (safe). The caller
+// (ckn-context on source=compact) resolves self-id, then renders the head + announces.
+graphRouter.get('/resume-state', (req, res) => {
+  try {
+    const session = String(req.query.session ?? '')
+    const claim = session ? getOpenClaimForSession(session) : null
+    if (!claim) return res.json({ verdict: 'ambiguous', reason: session ? 'no-open-claim' : 'no-session' })
+    let predEval: PredEval | null = null
+    if (claim.mode.startsWith('waiting-on:')) {
+      const pred = parseWaitingOn(claim.mode)
+      if (!pred) predEval = 'unknowable'
+      else if (pred.kind === 'thread') {
+        const t = getThread(pred.threadId)
+        predEval = evalThreadPredicate(
+          { status: pred.status },
+          t ? { found: true, status: t.state.status } : { found: false },
+        )
+      } else {
+        predEval = evalBusPredicate(hasReplyTo(pred.msgId))
+      }
+    }
+    const verdict = resumeDecision({ selfIdResolved: true, mode: claim.mode, predEval })
+    res.json({ verdict, threadId: claim.threadId, mode: claim.mode })
   } catch (e: any) {
     res.status(500).json({ error: e?.message ?? String(e) })
   }

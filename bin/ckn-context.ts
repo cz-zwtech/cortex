@@ -34,6 +34,7 @@ import { readCodegraphCache, CODEGRAPH_CACHE_TTL_MS } from '../server/codegraphC
 import { resolveGraphedRepo } from './_codegraph-aware.js'
 import { readGitProvenance } from '../server/git/provenance.js'
 import { syncEngagementBlock } from './ckn-engagement.js'
+import { resolveSelfSessionId } from './_session-id.js'
 
 const SERVER_URL = 'http://localhost:3001'
 const TIMEOUT_MS = 5_000
@@ -187,6 +188,69 @@ const readStdin = (): Promise<string> =>
     process.stdin.on('error', () => resolve(data))
   })
 
+// ── PostCompact resume-state (#89) ────────────────────────────────────────────
+// On a /compact resume (SessionStart source="compact") restore the MANDATE but never trust
+// the pre-compact trigger: the server re-evaluates the claim's waiting-on predicate from
+// ground truth and returns a verdict. The hook only INJECTS a head + announces — the model
+// still drives (and the standing no-auto-exec-next_step rule holds). A human --resume
+// (source="resume") is untouched here, keeping the /cortex-continue stop discipline.
+interface ResumeVerdict {
+  verdict: 'resumable' | 'held' | 'ambiguous'
+  threadId?: string
+  mode?: string
+  reason?: string
+}
+
+const renderResumeHead = (v: ResumeVerdict): string => {
+  const w = v.threadId ? ` (thread \`${v.threadId}\`, mode \`${v.mode}\`)` : ''
+  if (v.verdict === 'resumable')
+    return `## Resume — mandate restored${w}\n\nYour standing mandate is intact and the wait-condition is verifiably clear, so you are CLEAR TO CONTINUE. Re-orient from your thread first — do NOT auto-run \`next_step\`; it's a note, not a command. Then proceed with the human.`
+  if (v.verdict === 'held')
+    return `## Resume — HELD${w}\n\nYou were waiting on a condition that is STILL unsatisfied (re-checked against ground truth). Hold the work and surface that you're blocked + on what. Announced on the bus.`
+  return `## Resume — AMBIGUOUS\n\nCan't confirm it's safe to resume (${v.reason ?? 'mode missing/unparseable or condition unknowable'}). Default SAFE: hold, re-orient, and flag a human/peer to resolve. Announced on the bus.`
+}
+
+// Reference-based, minimal, agent-originated (NO humanProvenance, NO next_step body — peers
+// pull detail from the already-replicated graph). Best-effort; never blocks the resume.
+const announceResume = async (sid: string, v: ResumeVerdict): Promise<void> => {
+  const ref = v.threadId ? ` thread:${v.threadId} mode=${v.mode}` : ''
+  await fetch(`${SERVER_URL}/api/bus/send`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fromSession: sid,
+      fromName: sid.slice(0, 8),
+      to: '*',
+      kind: 'msg',
+      body: `resume: back post-compact, verdict=${v.verdict}${ref}`,
+    }),
+  }).then(() => undefined)
+}
+
+const resumeBlock = async (input: HookInput): Promise<string> => {
+  if (input.source !== 'compact') return ''
+  try {
+    const self = resolveSelfSessionId({
+      env: process.env.CLAUDE_CODE_SESSION_ID,
+      input: input.session_id,
+    })
+    if (!self.sessionId) return renderResumeHead({ verdict: 'ambiguous', reason: 'self-session-id resolution miss' })
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS)
+    const res = await fetch(
+      `${SERVER_URL}/api/graph/resume-state?session=${encodeURIComponent(self.sessionId)}`,
+      { signal: ctrl.signal },
+    )
+    clearTimeout(t)
+    if (!res.ok) return '' // server hiccup → no resume head (best-effort, never block)
+    const v = (await res.json()) as ResumeVerdict
+    void announceResume(self.sessionId, v).catch(() => {})
+    return renderResumeHead(v)
+  } catch {
+    return '' // best-effort: a resume head must never block SessionStart
+  }
+}
+
 const main = async () => {
   const raw = await readStdin()
   let input: HookInput = {}
@@ -222,7 +286,8 @@ const main = async () => {
 
     const busBlock = await busRegisterBlock(sid, cwd, topic ?? '')
     const cgBlock = await codegraphCapabilityBlock(cwd)
-    const markdownWithBus = [markdown, busBlock, cgBlock].filter(Boolean).join('\n')
+    const resume = await resumeBlock(input)
+    const markdownWithBus = [resume, markdown, busBlock, cgBlock].filter(Boolean).join('\n')
 
     const out = renderHookOutput(input.hook_event_name ?? 'SessionStart', markdownWithBus)
     // null ⇒ an event that doesn't accept additionalContext (e.g. PostCompact, where

@@ -504,6 +504,13 @@ export async function sendMessage(input: SendInput): Promise<{ id: string }> {
   return { id }
 }
 
+/** True iff any bus message references <refId> — i.e. a reply/ack to it has landed. The
+ *  ground truth for a `waiting-on:bus=<msgid>` resume predicate (#89). */
+export function hasReplyTo(refId: string): boolean {
+  if (!refId) return false
+  return !!get<{ x: number }>(`SELECT 1 AS x FROM bus_messages WHERE ref = ? LIMIT 1`, refId)
+}
+
 export async function inbox(
   sessionId: string,
   opts: { undeliveredOnly?: boolean } = {},
