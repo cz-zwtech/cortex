@@ -39,6 +39,7 @@ import fsSync from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { refreshHomeCache, baoHomeFetcher } from './cortexHome.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -88,27 +89,23 @@ const HOOKS: HookSpec[] = [
   { event: 'SessionEnd',   matcher: '', scriptName: 'ckn-extract.ts',    marker: 'ckn-extract',    timeout: 30 },
 ]
 
-const buildCommand = (scriptName: string): string => {
-  const tsx = path.join(PROJECT_ROOT, 'node_modules', '.bin', 'tsx')
-  const script = path.join(PROJECT_ROOT, 'bin', scriptName)
-  return `${tsx} ${script}`
-}
-
 /**
- * Detect whether a registered command refers to a Cortex script (any
- * ckn-* script) AT A DIFFERENT path than the current PROJECT_ROOT. This
- * happens when the user moves the repo — the registered hooks still
- * point at the old location and silently no-op. We rewrite them on
- * server boot so hooks survive a directory move.
+ * The relocatable hook command. Instead of a hardcoded absolute path, emit a shim
+ * that resolves CORTEX_HOME_DIR on EACH fire from the local cache file
+ * (`$HOME/.config/ckn/home`, written by the resolver), falling back to the baked
+ * derived literal when the cache is absent. `$HOME` (not `~`) is unambiguous across
+ * shells; the harness runs the command via `sh -c`, so `$(...)`, `${:-}` and `exec`
+ * all apply. `exec` replaces the shell so the hook script still receives its stdin
+ * JSON / stdout / exit code. Reading the cache each fire is what lets a relocation
+ * reach RUNNING sessions with no restart. Command-only (no `args`) — required, else
+ * the harness would use exec form and skip shell expansion.
  */
-const isStaleCknCommand = (command: string, expectedScript: string): boolean => {
-  const normalized = command.replace(/\\/g, '/')
-  const expectedSuffix = `/bin/${expectedScript}`
-  if (!normalized.endsWith(expectedSuffix)) return false
-  // It's a Cortex command, but does it point at the current PROJECT_ROOT?
-  const expectedFull = path.join(PROJECT_ROOT, 'bin', expectedScript).replace(/\\/g, '/')
-  return !normalized.includes(expectedFull)
-}
+export const buildCommand = (scriptName: string, projectRoot: string = PROJECT_ROOT): string =>
+  [
+    `H="$(cat "$HOME/.config/ckn/home" 2>/dev/null)";`,
+    `H="\${H:-${projectRoot}}";`,
+    `exec "$H/node_modules/.bin/tsx" "$H/bin/${scriptName}"`,
+  ].join(' ')
 
 const readSettings = async (): Promise<Record<string, any>> => {
   try {
@@ -125,21 +122,21 @@ const writeSettings = async (settings: Record<string, any>): Promise<void> => {
 }
 
 /**
- * Add or refresh a hook spec in the settings object, in-place. Returns
- * 'added' if newly installed, 'updated' if the path was rewritten to the
- * current PROJECT_ROOT (repo was moved since last install), or 'noop' if
- * everything matches.
+ * Add or refresh a hook spec in the settings object, in-place. Returns 'added' if
+ * newly installed, 'updated' if the command was rewritten (an old absolute-path form,
+ * a moved repo / stale baked literal, or a command-only-invariant repair), or 'noop'
+ * if everything already matches the desired relocatable shim.
  */
-const ensureHook = (
+export const ensureHook = (
   settings: Record<string, any>,
   spec: HookSpec,
+  projectRoot: string = PROJECT_ROOT,
 ): 'added' | 'updated' | 'noop' => {
-  const command = buildCommand(spec.scriptName)
+  const command = buildCommand(spec.scriptName, projectRoot)
   settings.hooks = settings.hooks ?? {}
   const groups: any[] = settings.hooks[spec.event] ?? []
 
-  // Look for a prior Cortex registration by marker. If the path is stale
-  // (repo moved), rewrite in place.
+  // Find a prior Cortex registration by marker, then rewrite it if it drifted.
   let updated = false
   let found = false
   for (const group of groups) {
@@ -148,9 +145,13 @@ const ensureHook = (
       const cmd = String(h.command ?? '')
       if (!cmd.includes(spec.marker)) continue
       found = true
-      if (isStaleCknCommand(cmd, spec.scriptName)) {
+      // Rewrite if the command drifted (old absolute path / moved repo / stale baked
+      // literal) OR the command-only invariant is violated: an `args` field switches
+      // the hook to exec form, which would NOT shell-expand the $HOME cache shim.
+      if (cmd !== command || h.args !== undefined) {
         h.command = command
         h.timeout = spec.timeout
+        if (h.args !== undefined) delete h.args
         updated = true
       }
     }
@@ -172,6 +173,22 @@ const ensureHook = (
   })
   settings.hooks[spec.event] = groups
   return 'added'
+}
+
+/**
+ * Upsert the CORTEX_HOME_DIR convenience var in the settings `env` block (which
+ * reaches the session + hook + Bash-tool subprocess env). The hot path resolves the
+ * home via the cache FILE; this var is a coarse fallback + interactive convenience.
+ * Non-destructive — preserves any other env keys. Returns true if it changed.
+ */
+export const ensureHomeEnv = (
+  settings: Record<string, any>,
+  projectRoot: string = PROJECT_ROOT,
+): boolean => {
+  settings.env = settings.env ?? {}
+  if (settings.env.CORTEX_HOME_DIR === projectRoot) return false
+  settings.env.CORTEX_HOME_DIR = projectRoot
+  return true
 }
 
 // ── slash commands ───────────────────────────────────────────────────────────
@@ -696,6 +713,15 @@ const ensureSkill = async (name: string): Promise<boolean> => {
  * without cracking open settings.json.
  */
 export const ensureStopHook = async (): Promise<void> => {
+  // Seed/refresh the relocatable home cache (~/.config/ckn/home) that the hook shims
+  // read on the hot path. Source per CKN_HOME_SOURCE (default local = this install's
+  // derived home). Atomic + validate-before-write; best-effort, never throws.
+  try {
+    const r = refreshHomeCache({ derivedHome: PROJECT_ROOT, fetchBao: baoHomeFetcher })
+    if (r.wrote) console.log(`[ckn] home cache ${r.reason}: ${r.value}`)
+  } catch {
+    /* best-effort — the shim's baked literal covers an unwritten cache */
+  }
   const settings = await readSettings()
   let settingsDirty = false
   const added: string[] = []
@@ -709,6 +735,12 @@ export const ensureStopHook = async (): Promise<void> => {
       settingsDirty = true
       updated.push(`${spec.event}/${spec.marker}`)
     }
+  }
+  // The relocatable hooks expand CORTEX_HOME_DIR; mirror it into the env block so the
+  // session + Bash-tool subprocess env carry it too (the FILE cache is the live source).
+  if (ensureHomeEnv(settings)) {
+    settingsDirty = true
+    updated.push('env/CORTEX_HOME_DIR')
   }
   if (settingsDirty) {
     await writeSettings(settings)
