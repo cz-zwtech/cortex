@@ -1,19 +1,26 @@
-# The Cortex bus dot (opt-in statusline addition)
+# Cortex statusline dots (opt-in additions)
 
 Cortex ships **no** statusline and never writes your `settings.json` `statusLine`
 key. Your statusline is your personal config — Cortex won't impose one or
 overwrite the one you have.
 
-What Cortex *offers* is a single optional **bus indicator** you can drop into a
-statusline you already maintain: a green `● bus` when a `ckn-bus watch` Monitor
-task is armed for the current session (so peer / cross-machine messages arrive in
-real time), or a red `● bus off` when it isn't (messages then only land at prompt
-boundaries until you arm the watcher).
+What Cortex *offers* is two optional **indicators** you can drop into a statusline
+you already maintain:
 
-This is a copy-paste snippet, not a shipped file. Add only the dot; the rest of
+- **bus dot** — a green `● bus` when a `ckn-bus watch` Monitor task is armed for
+  the current session (so peer / cross-machine messages arrive in real time), or a
+  red `● bus off` when it isn't (messages then only land at prompt boundaries until
+  you arm the watcher).
+- **mesh dot** — a green `● mesh` when this node has at least one **live** mesh
+  link (an open cross-machine WS connection), dim when the mesh is armed but not yet
+  connected, and nothing when the mesh is off. It reads the `live` field from the
+  local `/api/bus/mesh-status` diagnostic — distinct from `enabled` (armed), so it
+  shows a *real* connection, not just configured intent.
+
+Both are copy-paste snippets, not shipped files. Add only the dot(s); the rest of
 your statusline stays yours.
 
-## The snippet
+## The bus dot snippet
 
 Claude Code passes the statusline script a JSON blob on stdin that includes
 `.session_id`. This function scans `/proc` for a live `ckn-bus watch` bound to
@@ -84,14 +91,60 @@ Then set it in `~/.claude/settings.json` yourself:
 `"statusLine": { "type": "command", "command": "bash ~/.claude/your-statusline.sh" }`.
 Cortex will not do this for you.
 
+## The mesh dot snippet
+
+The mesh dot reads the **local, auth-free** `/api/bus/mesh-status` diagnostic and
+keys off its `live` field — true only when at least one mesh WS link is actually
+OPEN. `enabled` (armed by config) is *not* the same as a live connection, so the
+dot reflects reality, not intent.
+
+```bash
+# --- Cortex mesh dot: live cross-machine link indicator ---------------------
+# Echoes one of: live | armed | off | down. Auth-free local read (1s cap).
+cortex_mesh_state() {
+  local j
+  j=$(curl -s --max-time 1 http://localhost:3001/api/bus/mesh-status 2>/dev/null) || { echo down; return; }
+  [ -z "$j" ] && { echo down; return; }
+  if [ "$(printf '%s' "$j" | jq -r '.enabled')" = true ]; then
+    [ "$(printf '%s' "$j" | jq -r '.live')" = true ] && echo live || echo armed
+  else
+    echo off
+  fi
+}
+
+# Render the dot: green when live, dim when armed-but-not-connected, hidden otherwise.
+GREEN='\033[32m'; DIM='\033[2m'; RST='\033[0m'
+case "$(cortex_mesh_state)" in
+  live)  MESH_SEG="${GREEN}● mesh${RST}" ;;
+  armed) MESH_SEG="${DIM}● mesh${RST}" ;;   # enabled, no live link yet
+  *)     MESH_SEG="" ;;                       # off / server down → show nothing
+esac
+# ...then include "$MESH_SEG" wherever you want it in your printf line.
+# --- end Cortex mesh dot ----------------------------------------------------
+```
+
+Add it exactly like the bus dot: paste the function and the `MESH_SEG` block into
+your statusline script and reference `$MESH_SEG` in your `printf` line — don't
+replace your line. It needs `jq` (already used to parse the stdin JSON) and `curl`.
+Unlike the bus dot it makes one local HTTP call per render; the 1s cap means a
+stopped server costs at most a second and just hides the dot.
+
+**Offer it once the mesh has connected.** Until this node has joined the mesh and
+made its first link, `live` stays false and the dot sits dim — so the indicator
+earns its place after a first validated connection. Before that, the bus dot alone
+is the more meaningful signal.
+
 ## Prompt for an installing assistant
 
 If an LLM is helping set up Cortex, this is the instruction to give it:
 
-> Cortex ships no statusline. If the user wants the bus indicator, **add only the
-> bus dot** to their existing statusline script — never replace or rewrite it,
-> and never write the `statusLine` key in their `settings.json` on their behalf
-> (that's their call). Read their current statusline, insert the
-> `bus_watcher_armed` function and a `${BUS_SEG}` reference into their existing
-> output line, and leave everything else untouched. If they have no statusline
-> and want one, offer the minimal dot-only script above and let them wire it up.
+> Cortex ships no statusline. If the user wants an indicator, **add only the dot
+> they asked for** to their existing statusline script — never replace or rewrite
+> it, and never write the `statusLine` key in their `settings.json` on their behalf
+> (that's their call). For the **bus dot**, read their current statusline and insert
+> the `bus_watcher_armed` function and a `${BUS_SEG}` reference into their existing
+> output line. For the **mesh dot**, insert `cortex_mesh_state` and a `${MESH_SEG}`
+> reference the same way — but only offer it once this node has made a first live
+> mesh connection (before that the dot just sits dim). Leave everything else
+> untouched. If they have no statusline and want one, offer the minimal dot-only
+> script above and let them wire it up.

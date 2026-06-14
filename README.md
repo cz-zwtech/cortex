@@ -124,6 +124,7 @@ in its own page.
 | Your minds (private / team) | [docs/minds/private-mind.md](docs/minds/private-mind.md) |
 | Code graph | [docs/codegraph/codegraph.md](docs/codegraph/codegraph.md) |
 | The UI | [docs/ui.md](docs/ui.md) |
+| Statusline dots (bus / mesh, opt-in) | [docs/statusline-bus-dot.md](docs/statusline-bus-dot.md) |
 | Architecture (one page) | [docs/architecture.md](docs/architecture.md) |
 | Configuration reference | [docs/operate/configuration.md](docs/operate/configuration.md) |
 | Troubleshooting | [docs/operate/troubleshooting.md](docs/operate/troubleshooting.md) |
