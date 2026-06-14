@@ -14,6 +14,7 @@ import {
 import { extractPatterns, upsertPattern } from './graph/patterns.js'
 import { refreshAwareCache } from './awareCache.js'
 import { refreshCodegraphCache } from './codegraphCache.js'
+import { noteMemoryChange, isMemoryMdPath } from './graph/turnSync.js'
 
 const home = os.homedir()
 
@@ -252,6 +253,9 @@ function ensureWatcher(extraPaths: string[] = []) {
 
   const onChange = (kind: string) => (filePath: string) => {
     broadcast({ type: 'fs:change', kind, paths: [filePath] })
+    // Memory .md change → bump the silent-layer turn-sync change-guard (#111), so the next
+    // turn folds it into the graph and a quiet turn stays free. In-process, ~zero cost.
+    if (isMemoryMdPath(filePath)) noteMemoryChange(Date.now())
     // Session JSONLs trigger an additional session-specific broadcast.
     const ref = sessionRefFromPath(filePath)
     if (ref) {

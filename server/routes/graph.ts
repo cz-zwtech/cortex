@@ -14,6 +14,7 @@ import {
   pruneOrphanStubs,
   getAllForGraph,
 } from '../graph/sync.js'
+import { triggerTurnSync } from '../graph/turnSync.js'
 import { applyLinkageBackfill } from '../migrations.js'
 import { importVaultPaths } from '../graph/vaultImport.js'
 import { recordImport, listImports, removeImport } from '../importedVaults.js'
@@ -196,6 +197,20 @@ graphRouter.post('/sync', async (_req, res) => {
   } catch (e: any) {
     res.status(500).json({ error: e.message })
   }
+})
+
+// POST /api/graph/sync/turn — silent-layer turn cadence (#111). ENQUEUES a local md→graph
+// fold and FAST-ACKs; the heavy fold runs async server-side, and an in-memory change-guard
+// skips a no-change turn for free. LOCAL ONLY — never the remote/mind-sync path. The
+// caller (ckn-pause-context) awaits only this quick ack, so it can't block or drop the run.
+graphRouter.post('/sync/turn', (_req, res) => {
+  const fold = () =>
+    coalesceSync(() => withGraphWriteLock('turn-sync', () => syncMemories(memoryHome()))).then((result) => {
+      broadcastEvent({ type: 'graph:sync', source: 'turn', result })
+      return result
+    })
+  const decision = triggerTurnSync(fold, Date.now())
+  res.status(decision === 'fold' ? 202 : 200).json({ status: decision === 'fold' ? 'enqueued' : decision })
 })
 
 // GET /api/graph/search?q=... — full-text search across entries

@@ -31,6 +31,7 @@ import { assignmentCoherence } from '../server/bus/mandate.js'
 // message, not [[ckn-page]] fragments (within the protocol freeze).
 import { reassembleList } from './_bus-paginate.js'
 import { resolveSelfSessionId } from './_session-id.js'
+import { triggerTurnSyncRequest } from './_turn-sync-trigger.js'
 
 // This hook lives at <cortex>/bin/ckn-pause-context.ts — resolve the repo root
 // from its own location so the watcher-arm command we emit is correct for ANY
@@ -399,8 +400,14 @@ const main = async (): Promise<void> => {
   }
   const sid = input.session_id ?? ''
   const cwd = input.cwd ?? ''
+  // Silent layer (#111): fold any new memory .md into the LOCAL graph this turn. Fire
+  // concurrently with bus delivery (both local + independent); the server enqueues + fast-
+  // acks and runs the heavy fold async. Skipped for internal subprocesses (never author
+  // memory). Awaited before exit so this short-lived hook actually delivers the request.
+  const turnSync = isInternalCwd(cwd) ? null : triggerTurnSyncRequest(SERVER_URL)
   const snapshot = maybeSnapshotPrompt(sid)
   const busBlock = await busDeliveryBlock(sid, cwd, readMachineId())
+  if (turnSync) await turnSync
   // Watcher self-check: nudge until a real-time watcher is armed for this
   // session. Skipped for internal subprocesses (never bus peers) and when the
   // server is the gate — only nag if the bus is actually in play (server up).
