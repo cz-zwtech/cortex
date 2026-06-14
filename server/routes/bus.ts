@@ -295,6 +295,10 @@ busRouter.get('/stream', (req, res) => {
   })
 })
 
+// `enabled` only means the mesh is armed by config; `live` means it actually has at least
+// one OPEN ws link. Consumers must not treat armed-but-unconnected as connected.
+export const meshLive = (links: Array<{ connected: boolean }>): boolean => links.some((l) => l.connected)
+
 // GET /api/bus/mesh-status — mesh diagnostics (NOT token-gated; local read).
 // Reads the in-process mesh view + the persisted per-peer cursors for the
 // `ckn-bus mesh` subcommand (m2m-gate diagnostics).
@@ -318,13 +322,15 @@ busRouter.get('/mesh-status', (_req, res) => {
     // CKN_MESH_BIND) with unreachable peers can only relay; suggest WSL mirrored
     // networking + a published bind for a DIRECT link. Advisory (relay is a valid fallback).
     const hint = meshDirectLinkHint({ bindConfigured: meshBindConfig() != null, peers })
+    const links = wsLinks()
     res.json({
       enabled: meshEnabled(),
+      live: meshLive(links),
       nodeId: nodeId(),
       peers,
       cursors,
       wsPeers: wsPeerCount(),
-      wsLinks: wsLinks(),
+      wsLinks: links,
       hints: hint ? [hint] : [],
     })
   } catch (e: any) {
