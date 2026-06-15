@@ -737,11 +737,32 @@ const ensureSkill = async (name: string): Promise<boolean> => {
 }
 
 /**
+ * Whether a boot should register Cortex's real user state (the hooks, slash
+ * commands, skills, and the ~/.config/ckn/home cache). FALSE on an ephemeral/test
+ * boot so a server spawned from a WORKTREE (every bus integration test) does NOT
+ * repoint the real ~/.claude + home cache onto itself. Gated on
+ * CKN_FORBID_DEFAULT_DB (already the ephemeral-boot, real-user-state-off-limits
+ * sentinel — the same var db.ts guards the default DB on) OR CKN_NO_HOOK_REGISTER
+ * (the explicit single-purpose hatch). Truthiness matches the db.ts guard: any
+ * non-empty value counts as set; empty/absent does not.
+ */
+export const shouldRegisterHooks = (env: Record<string, string | undefined>): boolean =>
+  !env.CKN_FORBID_DEFAULT_DB && !env.CKN_NO_HOOK_REGISTER
+
+/**
  * Idempotent install for every Cortex hook + command + skill. Called from
  * server boot. Logs each newly-registered item so the user can see what landed
  * without cracking open settings.json.
  */
 export const ensureStopHook = async (): Promise<void> => {
+  // Ephemeral/test boot (e.g. a server spawned from a worktree by a bus
+  // integration test): skip ALL real-user-state registration — home cache,
+  // settings hooks, commands, skills — so the test can't hijack ~/.claude / the
+  // home pointer onto the worktree. See shouldRegisterHooks.
+  if (!shouldRegisterHooks(process.env)) {
+    console.log('[ckn] ephemeral boot — skipping hook/command/skill registration')
+    return
+  }
   // Seed/refresh the relocatable home cache (~/.config/ckn/home) that the hook shims
   // read on the hot path. Source per CKN_HOME_SOURCE (default local = this install's
   // derived home). Atomic + validate-before-write; best-effort, never throws.
