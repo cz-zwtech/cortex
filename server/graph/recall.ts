@@ -181,6 +181,9 @@ const edgeBonus = (ctx: RecallContext, viaEdge: string | null): number => {
   if (viaEdge === 'MENTIONS_TOOL' && ctx.tool) return 0.08
   if (viaEdge === 'CONTRADICTS') return 0.05
   if (viaEdge === 'OCCURRED_IN') return 0.03
+  // Co-thread sibling (now-slice 2-hop): must beat the flat 0.05 hop penalty so
+  // a cosine-less sibling still clears the bar.
+  if (viaEdge === 'GROUPS') return 0.08
   return 0.01
 }
 
@@ -305,6 +308,43 @@ const expandFromFiles = async (
   )
   for (const row of rows) {
     addCandidate(pool, row.id, { hops: 1, cosine: null, viaEdge: 'MENTIONS_FILE' })
+  }
+}
+
+// now-slice co-thread expansion: max sibling members pulled per thread hub.
+const COTHREAD_K = Number(process.env.CKN_COTHREAD_K) || 5
+
+/**
+ * Bounded co-thread expansion (now-slice): from seed MEMBER memories, hop
+ * INBOUND to their thread hubs (a seed is the dst of a GROUPS edge), then
+ * OUTBOUND from each hub to its OTHER members (src=thread of GROUPS), capped at
+ * COTHREAD_K per thread. The thread hub itself is never added (rankCandidates
+ * also drops kind='thread'). Siblings enter at hops=2; edgeBonus('GROUPS')=0.08
+ * beats the flat 0.05 hop penalty so a cosine-less sibling still clears the bar.
+ */
+const expandCoThread = async (
+  seedIds: string[],
+  pool: Map<string, CandidateState>,
+): Promise<void> => {
+  if (seedIds.length === 0) return
+  const seedPh = placeholders(seedIds.length)
+  const threadRows = all<{ threadId: string }>(
+    `SELECT DISTINCT src AS threadId FROM edges WHERE dst IN (${seedPh}) AND rel = 'GROUPS'`,
+    ...seedIds,
+  )
+  if (threadRows.length === 0) return
+  const seedSet = new Set(seedIds)
+  for (const { threadId } of threadRows) {
+    const members = all<{ memId: string }>(
+      `SELECT dst AS memId FROM edges WHERE src = ? AND rel = 'GROUPS'`,
+      threadId,
+    )
+    let added = 0
+    for (const { memId } of members) {
+      if (seedSet.has(memId) || added >= COTHREAD_K) continue
+      addCandidate(pool, memId, { hops: 2, cosine: null, viaEdge: 'GROUPS' })
+      added++
+    }
   }
 }
 
@@ -463,6 +503,12 @@ export const graphRecall = async (ctx: RecallContext): Promise<RecallHit[]> => {
   }
   if (ctx.tool) {
     await expandFromTool(ctx.tool, pool)
+  }
+
+  // 3b. Co-thread expansion (now-slice) — objective binder. Runs after ALL seed
+  //     + file/tool expansion so siblings expand from every seed; bounded 2-hop.
+  if (pool.size > 0) {
+    await expandCoThread(Array.from(pool.keys()), pool)
   }
 
   // 4. Drop excluded ids before hydration to save a round-trip

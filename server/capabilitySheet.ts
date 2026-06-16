@@ -384,9 +384,86 @@ const fetchRelevantMemories = async (
       buckets.push(queryBucket(`(${orClause})`, scopes, 15))
     }
   }
+  // Bucket 4 — cross-objective (now-slice): memories in OTHER project scopes
+  // bound (GROUPS) to this machine's OPEN threads. Renders after project,
+  // before vault; deduped against everything already collected.
+  const shownSoFar = buckets.flat().map((m) => m.id)
+  buckets.push(await fetchCrossObjectiveBucket(cwd, shownSoFar))
+
   buckets.push(queryBucket(`scope LIKE 'vault:%' ESCAPE '\\'`, [], 10))
 
   return buckets.flat()
+}
+
+/**
+ * SessionStart cross-objective bucket (now-slice Piece 3). Memories from OTHER
+ * project scopes bound (GROUPS edge) to an OPEN thread owned by THIS machine —
+ * the box's in-flight objectives. owner = MACHINE (getMachineId): at SessionStart
+ * the session holds no thread claims yet, so this machine's open threads are the
+ * precise, non-global seed. Capped at 5, cross-scope only — OTHER project scopes
+ * (excludes user-wide, vault, and the cwd's ancestor project scopes), deduped
+ * against already-shown ids and
+ * within itself. Empty (no behaviour change) when there are no open threads or
+ * no cross-scope members.
+ */
+export const fetchCrossObjectiveBucket = async (
+  cwd: string | undefined,
+  alreadyShown: string[],
+): Promise<MemoryInfo[]> => {
+  const { all } = await import('./graph/db.js')
+  const { getMachineId } = await import('./privateMind.js')
+  const { listThreads, OPEN_STATUSES } = await import('./graph/threads.js')
+
+  const threads = listThreads({ ownerMachine: getMachineId(), statuses: OPEN_STATUSES }).slice(0, 5)
+  if (threads.length === 0) return []
+  const inScope = new Set(cwd ? ancestorProjectScopes(cwd) : [])
+  const shown = new Set(alreadyShown)
+  const threadIds = threads.map((t) => t.id)
+  const ph = threadIds.map(() => '?').join(', ')
+
+  const rows = all<{
+    id: string
+    name: string
+    scope: string
+    kind: string
+    description: string
+    content: string
+    syncedAt: number | bigint
+    engagement: number | bigint | null
+  }>(
+    `SELECT e.id AS id, e.name AS name, e.scope AS scope, e.kind AS kind, ` +
+      `       e.description AS description, e.content AS content, e.syncedAt AS syncedAt, ` +
+      `       e.engagement AS engagement ` +
+      `FROM entries e JOIN edges g ON g.dst = e.id AND g.rel = 'GROUPS' ` +
+      `WHERE g.src IN (${ph}) AND e.kind NOT IN ('thread','file','tool','pattern','concept') ` +
+      `ORDER BY e.syncedAt DESC`,
+    ...threadIds,
+  )
+
+  const out: MemoryInfo[] = []
+  const seen = new Set<string>()
+  for (const r of rows) {
+    if (out.length >= 5) break
+    // cross-objective = OTHER PROJECT scopes only: skip already-shown, in-bucket
+    // dups, user-wide, vault (it has its own SessionStart bucket, so listing it
+    // here would double-show it), and the launch folder's ancestor project scopes.
+    if (
+      shown.has(r.id) || seen.has(r.id) ||
+      r.scope === 'user' || r.scope.startsWith('vault:') || inScope.has(r.scope)
+    ) continue
+    seen.add(r.id)
+    out.push({
+      id: r.id,
+      name: r.name,
+      scope: r.scope,
+      kind: r.kind,
+      description: r.description ?? '',
+      bodyPreview: trimBody(r.content ?? ''),
+      syncedAt: Number(r.syncedAt),
+      engagement: Number(r.engagement ?? 0),
+    })
+  }
+  return out
 }
 
 /**

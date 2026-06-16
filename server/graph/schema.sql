@@ -167,7 +167,12 @@ CREATE INDEX IF NOT EXISTS idx_profile_facet_group ON profile_facet_meta(competi
 --       CALLS | IMPORTS | EXTENDS | IMPLEMENTS | REFERENCES | ABOUT |
 --       SURFACED_IN  (s1 surfacings log: memory→session; weight=surface count,
 --                     notedAt=last-surfaced-at. OBSERVATIONAL — survives the
---                     re-upsert wipe, see OBSERVATIONAL_RELS in sync.ts.)
+--                     re-upsert wipe, see OBSERVATIONAL_RELS in sync.ts.) |
+--       GROUPS  (now-slice: thread→member memory; DECLARED, re-derived from
+--               thread.state.links ONLY by deriveThreadEdgesForChanged — NOT
+--               from memory-body [[thread:]] backrefs; links-only keeps the edge
+--               thread-owned (src=thread) so a member re-upsert can't wipe it.
+--               NOT observational, so wiped+rebuilt on the thread's re-upsert.)
 -- Composite PK gives free idempotency (INSERT OR IGNORE/REPLACE). Entry and
 -- symbol edges share this table — ids never collide (symbol ids are qualified).
 CREATE TABLE IF NOT EXISTS edges (

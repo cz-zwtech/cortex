@@ -826,6 +826,15 @@ export async function syncMemories(home: string): Promise<SyncResult> {
     result.errors.push(`file-derivation pass: ${e.message}`)
   }
 
+  // now-slice Piece 2: derive thread→member GROUPS edges from changed threads'
+  // state.links. Thread-owned (src=thread) so a member re-upsert never drops it.
+  // Same incremental scoping + post-upsert ordering as the file pass above.
+  try {
+    deriveThreadEdgesForChanged(changedIds)
+  } catch (e: any) {
+    result.errors.push(`thread-derivation pass: ${e.message}`)
+  }
+
   // Passes B and C only matter when something actually changed on disk.
   // On an all-skip sync (nothing upserted) the name-mention edges and the
   // vault replay are already current from the prior sync — re-running them
@@ -1143,6 +1152,60 @@ export function deriveFileEdgesForChanged(
     }
   })
   return { scanned, created, updated }
+}
+
+/**
+ * Piece 2 (now-slice): derive `GROUPS` edges (thread → member memory) from
+ * changed THREAD entries. The edge is thread-owned (src=thread): re-upserting a
+ * member never drops it, and re-upserting the thread re-derives it from current
+ * `state.links` (Decision A — avoids the lossy-round-trip wipe a memory-owned
+ * edge would suffer). A link target resolves to an entry by exact id, then a
+ * UNIQUE `…/<slug>` suffix or name; unresolved/self/duplicate links are skipped.
+ * Scoped to changedIds — bounded, never a full-graph scan.
+ */
+export function deriveThreadEdgesForChanged(
+  changedIds: string[],
+): { scanned: number; created: number } {
+  let scanned = 0
+  let created = 0
+  if (changedIds.length === 0) return { scanned, created }
+  transaction(() => {
+    for (const id of changedIds) {
+      const t = get<{ id: string; content: string | null }>(
+        `SELECT id, content FROM entries WHERE id = ? AND kind = 'thread'`,
+        id,
+      )
+      if (!t) continue
+      scanned++
+      // The thread owns its src= edges; the per-file upsert this sync already
+      // wiped them (Decision A). Re-derive the full current set from links — the
+      // explicit DELETE also makes a standalone re-derive reconcile removals.
+      run(`DELETE FROM edges WHERE src = ? AND rel = 'GROUPS'`, id)
+      const seen = new Set<string>()
+      for (const link of parseThreadState(t.content).links) {
+        const memId = resolveLinkToEntryId(link)
+        if (!memId || memId === id || seen.has(memId)) continue
+        seen.add(memId)
+        ensureTypedEdge(null, 'GROUPS', id, memId)
+        created++
+      }
+    }
+  })
+  return { scanned, created }
+}
+
+/** Resolve a thread link string to an entry id. Exact id → a UNIQUE `…/<slug>`
+ *  suffix or name. Returns null when missing OR ambiguous (never guesses). */
+function resolveLinkToEntryId(link: string): string | null {
+  const ref = link.replace(/^\[\[/, '').replace(/\]\]$/, '').trim()
+  if (!ref) return null
+  if (get<{ x: number }>(`SELECT 1 AS x FROM entries WHERE id = ?`, ref)) return ref
+  const matches = all<{ id: string }>(
+    `SELECT id FROM entries WHERE id LIKE ? OR name = ?`,
+    `%/${ref}`,
+    ref,
+  )
+  return matches.length === 1 ? matches[0]!.id : null
 }
 
 // Connect entries by name mentions in body content. Bidirectional concepts
