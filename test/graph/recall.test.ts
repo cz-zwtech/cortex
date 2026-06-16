@@ -126,13 +126,16 @@ edge('p-tool', toolEntryId(TOOL), 'MENTIONS_TOOL')
   assert.equal(byId.get('m-file')!.source, 'memory', 'memory source bucket')
 }
 
-// ── 2. scope filter keeps only matching scopes ─────────────────────────────────
+// ── 2. scope is a soft PRIOR, not a filter — nothing is excluded by scope ──────
+// (now-slice) The old hard scope filter is gone: passing `scopes` nudges
+// ranking via scopeProximity but never DROPS an out-of-scope entry. Recall
+// stays folder-transcending. Presence-only assertions (robust to the nudge).
 {
   const hits = await graphRecall({ query: 'q', files: [FILE], tool: TOOL, scopes: ['shared:'], limit: 20 })
   const ids = new Set(hits.map((h) => h.id))
-  assert.ok(ids.has('s-file'), 'shared kept under shared: prefix filter')
-  assert.ok(!ids.has('m-file'), 'memory:auto excluded by shared: scope filter')
-  assert.ok(!ids.has('m-tool'), 'tool memory excluded by shared: scope filter')
+  assert.ok(ids.has('s-file'), 'shared entry still present')
+  assert.ok(ids.has('m-file'), 'out-of-scope memory NOT excluded — scope is a prior, not a filter')
+  assert.ok(ids.has('m-tool'), 'out-of-scope memory NOT excluded — scope is a prior, not a filter')
 }
 
 // ── 3. excludeIds drops the named id pre-hydration ─────────────────────────────

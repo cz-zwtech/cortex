@@ -42,6 +42,11 @@ const DECAY_RANK_PENALTY = Number(process.env.CKN_DECAY_RANK_PENALTY) || 0.3
 // decay on recallForFile is GATED default-OFF until measured. graphRecall
 // (per-prompt) ships ON. Flip with CKN_DECAY_RECALLFORFILE=1 once profiled.
 const DECAY_ON_RECALLFORFILE = process.env.CKN_DECAY_RECALLFORFILE === '1'
+// Scope prior (now-slice): a CONSERVATIVE additive nudge so same-project /
+// same-objective memories edge out equally-relevant ones — it must NEVER
+// override a meaningfully better cosine match. Labeled tuning knob; revisit
+// only on a quality eyeball, do not raise into override territory.
+export const SCOPE_PRIOR_WEIGHT = Number(process.env.CKN_SCOPE_PRIOR_WEIGHT) || 0.05
 
 /** Build a `(?, ?, …)` placeholder list of length `n` for an `IN (…)` clause. */
 const placeholders = (n: number): string => Array.from({ length: n }, () => '?').join(', ')
@@ -55,7 +60,8 @@ export interface RecallContext {
   errorText?: string
   /** File paths mentioned in the current context — drives :MENTIONS_FILE traversal */
   files?: string[]
-  /** Hard scope filter (e.g. only 'pattern:auto', only 'shared:*') */
+  /** In-play scopes for the soft scope PRIOR (ancestor project scopes of the
+   *  caller's cwd). No longer a hard filter — recall stays folder-transcending. */
   scopes?: string[]
   /** Ids to exclude from the result set — useful when callers already
    *  have one entry and want "similar but not this one" */
@@ -145,6 +151,22 @@ const recencyScore = (updatedAt: number): number => {
   const ageDays = (Date.now() - updatedAt) / (1000 * 60 * 60 * 24)
   if (ageDays < 0) return 1
   return Math.exp(-ageDays / RECENCY_HALFLIFE_DAYS)
+}
+
+/**
+ * Soft scope proximity in [0,1]. Mirrors the matching the OLD hard filter used
+ * (exact id or descendant) but as a RANKING signal, never an exclusion:
+ * in-play project scope → 1, user-wide → 0.5, anything else → 0. With no
+ * in-play scopes (the common case) it returns 0 and recall is fully
+ * scope-agnostic, exactly as today. Boundary-aware: '-' is the encoded path
+ * separator, so an exact scope or a true DESCENDANT matches, never a sibling
+ * whose encoded name is a mere string-prefix (…-personal vs …-personalish).
+ */
+export const scopeProximity = (rowScope: string, inPlayScopes: string[] | undefined): number => {
+  if (!inPlayScopes || inPlayScopes.length === 0) return 0
+  if (inPlayScopes.some((s) => rowScope === s || rowScope.startsWith(`${s}-`))) return 1
+  if (rowScope === 'user') return 0.5
+  return 0
 }
 
 /**
@@ -347,6 +369,65 @@ const hydrate = async (
   return out
 }
 
+export interface ScoredCandidate {
+  row: {
+    id: string; name: string; kind: string; description: string; content: string
+    scope: string; updatedAt: number; syncedAt: number; pinned: boolean
+  }
+  state: CandidateState
+  usage: number
+  /** s4 decay score [0,1], precomputed by the caller so this stays DB-free. */
+  decay: number
+}
+
+/**
+ * Pure scoring + filtering of an already-hydrated candidate set. Extracted from
+ * graphRecall so the now-slice scope prior and the folder-transcendence guard
+ * are unit-testable without embeddings/DB. NOTE: there is NO scope EXCLUSION
+ * here — scope enters ONLY as the additive scopeProximity prior, so recall stays
+ * folder-transcending. Stub/hub kinds (file/tool/thread) and thin concepts are
+ * dropped; since/until bounds applied.
+ */
+export const rankCandidates = (candidates: ScoredCandidate[], ctx: RecallContext): RecallHit[] => {
+  const hits: RecallHit[] = []
+  for (const c of candidates) {
+    const { row, state } = c
+    if (ctx.since !== undefined && row.updatedAt < ctx.since) continue
+    if (ctx.until !== undefined && row.updatedAt > ctx.until) continue
+    // Traversal hubs aren't "memories" — file/tool stubs and (now) thread hubs.
+    if (row.kind === 'file' || row.kind === 'tool' || row.kind === 'thread') continue
+    if (row.kind === 'concept' && (row.content ?? '').trim().length < 50) continue
+
+    const sig: Omit<RecallSignals, 'composite' | 'decay'> = {
+      cosine: state.cosine,
+      hops: state.hops,
+      recency: recencyScore(row.updatedAt),
+      viaEdge: state.viaEdge,
+      usage: c.usage,
+    }
+    // Pinned mental models get a flat +0.3 boost. Scope prior is a small
+    // additive nudge (never an exclusion). s4 decay de-prioritizes stale.
+    const pinBoost = row.pinned ? 0.3 : 0
+    const scopeBonus = SCOPE_PRIOR_WEIGHT * scopeProximity(row.scope, ctx.scopes)
+    const compositeScore =
+      composite(sig, ctx) + pinBoost + scopeBonus - DECAY_RANK_PENALTY * c.decay
+
+    hits.push({
+      id: row.id,
+      name: row.name,
+      kind: row.kind,
+      description: row.description,
+      content: row.content,
+      scope: row.scope,
+      source: kindToSource(row.kind, row.scope),
+      syncedAt: row.syncedAt,
+      signals: { ...sig, decay: c.decay, composite: compositeScore },
+    })
+  }
+  hits.sort((a, b) => b.signals.composite - a.signals.composite)
+  return hits
+}
+
 // ── public API ──────────────────────────────────────────────────────────────
 
 export const graphRecall = async (ctx: RecallContext): Promise<RecallHit[]> => {
@@ -396,56 +477,21 @@ export const graphRecall = async (ctx: RecallContext): Promise<RecallHit[]> => {
   //     candidate set instead of one per candidate.
   const usage = await usageBonuses(candidateIds)
 
-  // 6. Score + filter by scope
-  const hits: RecallHit[] = []
+  // 6. Assemble scored candidates (decay precomputed per candidate so the
+  //    ranking stays a pure, testable function) and rank. Scope enters ONLY as
+  //    the soft prior inside rankCandidates — NOT a filter (folder-transcending).
+  //    s4 decay: ONE decayScore per already-fetched candidate (bounded to the
+  //    candidate set, never a corpus scan).
+  const candidates: ScoredCandidate[] = []
   for (const id of candidateIds) {
     const row = rows.get(id)
     if (!row) continue
-    if (ctx.scopes && ctx.scopes.length > 0) {
-      if (!ctx.scopes.some((s) => row.scope === s || row.scope.startsWith(s))) continue
-    }
-    if (ctx.since !== undefined && row.updatedAt < ctx.since) continue
-    if (ctx.until !== undefined && row.updatedAt > ctx.until) continue
-    // Drop pure stub entries (file/tool/session) from the response —
-    // they're useful as traversal hubs but aren't "memories" the
-    // recall hook should render.
-    if (row.kind === 'file' || row.kind === 'tool') continue
-    if (row.kind === 'concept' && (row.content ?? '').trim().length < 50) continue
-
     const state = pool.get(id)!
-    const sig: Omit<RecallSignals, 'composite' | 'decay'> = {
-      cosine: state.cosine,
-      hops: state.hops,
-      recency: recencyScore(row.updatedAt),
-      viaEdge: state.viaEdge,
-      usage: usage.get(id) ?? 0,
-    }
-    // Pinned mental models get a flat +0.3 boost — user has explicitly
-    // marked this load-bearing. Applies to both Entry memories and
-    // observation rows.
-    const pinBoost = row.pinned ? 0.3 : 0
-    // s4: de-prioritize stale memories — ONE decayScore per already-fetched
-    // candidate (bounded to the candidate set, never a corpus scan). exempt /
-    // acted-on → score 0 → zero penalty; a high-decay memory is docked but still
-    // RETURNS (rank, not filter — MARK never delete).
-    const decay = decayScore(id, Date.now())
-    const compositeScore = composite(sig, ctx) + pinBoost - DECAY_RANK_PENALTY * decay.score
-
-    hits.push({
-      id: row.id,
-      name: row.name,
-      kind: row.kind,
-      description: row.description,
-      content: row.content,
-      scope: row.scope,
-      source: kindToSource(row.kind, row.scope),
-      syncedAt: row.syncedAt,
-      signals: { ...sig, decay: decay.score, composite: compositeScore },
-    })
+    candidates.push({ row, state, usage: usage.get(id) ?? 0, decay: decayScore(id, Date.now()).score })
   }
+  const hits = rankCandidates(candidates, ctx)
 
-  // 7. Sort + limit
-  hits.sort((a, b) => b.signals.composite - a.signals.composite)
+  // 7. Limit
   return hits.slice(0, limit)
 }
 

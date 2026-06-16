@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { graphRecall, type RecallHit } from '../graph/recall.js'
 import { recordSurface } from '../usageScores.js'
 import { recordSurfacings } from '../graph/surfacings.js'
+import { ancestorProjectScopes } from '../graph/projectScopes.js'
 
 export const recallRouter = Router()
 
@@ -49,7 +50,7 @@ const parseTimestamp = (s: unknown): number | undefined => {
 }
 
 recallRouter.post('/', async (req, res) => {
-  const { tool, args, errorMessage, since, until, since_relative, sessionId } = (req.body ?? {}) as {
+  const { tool, args, errorMessage, since, until, since_relative, sessionId, cwd } = (req.body ?? {}) as {
     tool?: string
     args?: string
     errorMessage?: string
@@ -57,6 +58,7 @@ recallRouter.post('/', async (req, res) => {
     until?: string
     since_relative?: string
     sessionId?: string
+    cwd?: string
   }
   if (!tool || typeof tool !== 'string') {
     return res.status(400).json({ error: 'tool required' })
@@ -96,6 +98,9 @@ recallRouter.post('/', async (req, res) => {
       limit: 25,
       since: sinceMs ?? undefined,
       until: untilMs ?? undefined,
+      // now-slice: cwd → ancestor project scopes feed the soft scope prior in
+      // graphRecall (a ranking nudge, never a filter).
+      scopes: cwd ? ancestorProjectScopes(cwd) : undefined,
     })
 
     // Split into response buckets. Cap each at 5 to keep the injected

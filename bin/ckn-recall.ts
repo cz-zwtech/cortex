@@ -198,6 +198,7 @@ const fetchRecall = async (
   args?: string,
   errorMessage?: string,
   sessionId?: string,
+  cwd?: string,
 ): Promise<{
   patterns: RecallHit[]
   shared: RecallHit[]
@@ -209,7 +210,8 @@ const fetchRecall = async (
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // sessionId → s1 surfacings log (SURFACED_IN edge per recalled memory).
-      body: JSON.stringify({ tool, args, errorMessage, sessionId }),
+      // cwd → ancestor project scopes for the soft scope prior (now-slice).
+      body: JSON.stringify({ tool, args, errorMessage, sessionId, cwd }),
       signal: ctrl.signal,
     })
     clearTimeout(t)
@@ -354,7 +356,7 @@ const main = async () => {
         }
         return ''
       })()
-      const { patterns, shared } = await fetchRecall(tool, argsStr, errorText, sessionId)
+      const { patterns, shared } = await fetchRecall(tool, argsStr, errorText, sessionId, input.cwd)
       if (patterns.length > 0 || shared.length > 0) {
         markFired(sessionId, tool)
         sections.push(renderContext(tool, patterns, shared))

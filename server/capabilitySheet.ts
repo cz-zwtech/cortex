@@ -16,6 +16,7 @@ import os from 'node:os'
 import YAML from 'yaml'
 import { getProfile, profileFacetCount, INJECT_MIN, type ProfileView } from './graph/profile.js'
 import { profileEnabled } from './profileEnabled.js'
+import { ancestorProjectScopes } from './graph/projectScopes.js'
 
 const FENCE = /^﻿?\s*---\r?\n([\s\S]*?)\r?\n---\r?\n?/
 
@@ -303,32 +304,8 @@ const readPermissions = async (
 
 // ── memory loader ────────────────────────────────────────────────────────────
 
-/**
- * Encode a filesystem path the way Claude Code encodes project dir names
- * under ~/.claude/projects/. Keeps the SessionStart context aligned with
- * the graph entries that ckn-sync writes for project-scope memories.
- */
-const encodeCwd = (cwd: string): string => cwd.replace(/[/\\:]/g, '-')
-
-/**
- * Build the list of project-scope candidates a given cwd should match.
- * The user might be in `/path/to/cortex`
- * but the memories live under `~/.claude/projects/-mnt-e-Repos-personal/`
- * (because the parent dir is where Claude Code launched). We walk up
- * from cwd to its ancestors and emit a scope for each so the query
- * captures every plausible parent.
- */
-const ancestorProjectScopes = (cwd: string): string[] => {
-  const out: string[] = []
-  let p = cwd
-  while (p && p !== '/' && p.length > 1) {
-    out.push(`project:${encodeCwd(p)}`)
-    const i = p.lastIndexOf('/')
-    if (i <= 0) break
-    p = p.slice(0, i)
-  }
-  return out
-}
+// `encodeCwd` + `ancestorProjectScopes` now live in ./graph/projectScopes.js so
+// the recall route and this sheet share one definition (imported above).
 
 /**
  * Pull memories the current cwd is likely to care about from the graph,
