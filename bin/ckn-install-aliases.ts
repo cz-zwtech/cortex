@@ -39,6 +39,11 @@ export const buildBlock = (rcPath: string, autostart: boolean): string => {
   if (isFish) {
     return [
       MARKER_BEGIN,
+      // Load documented Cortex env (CKN_MESH_TOKEN_CMD, CKN_PROFILE) BEFORE the
+      // autostart below, so a launched ckn-start inherits it. fish can't source a
+      // bash .env, so parse KEY=VALUE lines and export globally (surrounding quotes
+      // trimmed — values like CKN_MESH_TOKEN_CMD contain spaces and are quoted).
+      `if test -r "$HOME/.claude/.env"; for __l in (grep -vE '^[[:space:]]*(#|$)' "$HOME/.claude/.env"); set -l __kv (string split -m1 = -- $__l); set -gx $__kv[1] (string trim -c '"' -- $__kv[2]); end; end`,
       `function ckn-start; if ss -tln 2>/dev/null | grep -qE ":(3001|1420)\\b"; echo "ckn: already running"; return 0; end; mkdir -p ${logDir}; cd ${projectRoot}; nohup sh -c 'if command -v bao-run >/dev/null 2>&1 && [ -f "$HOME/.config/ckn/mesh.json" ] && timeout 5 bao-run CKN_MESH_TOKEN -- true >/dev/null 2>&1; then exec bao-run CKN_MESH_TOKEN -- npm start; else exec npm start; fi' > ${logDir}/server.log 2>&1 &; disown; echo "started — log: ${logDir}/server.log (mesh if reachable, else local-only)"; end`,
       // Stop by listening PID (port-derived) — robust to launch method (npm
       // start runs `tsx server/index.ts`, not `tsx watch`, and the real :3001
@@ -77,6 +82,12 @@ export const buildBlock = (rcPath: string, autostart: boolean): string => {
   return [
     MARKER_BEGIN,
     `# Source: ${projectRoot}/bin/ckn-install-aliases.ts`,
+    // Load documented Cortex env (CKN_MESH_TOKEN_CMD, CKN_PROFILE) BEFORE the
+    // function defs + autostart, so a launched ckn-start (and the server it
+    // spawns) inherits it — the runtime mesh auto-rejoin reads CKN_MESH_TOKEN_CMD
+    // from its own env. Guarded on a readable file; set -a auto-exports; +a is
+    // always restored so the rest of the rc isn't left in auto-export mode.
+    `if [ -r "$HOME/.claude/.env" ]; then set -a; . "$HOME/.claude/.env"; set +a; fi`,
     `ckn-start() {`,
     `  if ss -tln 2>/dev/null | grep -qE ":(3001|1420)\\b"; then`,
     `    echo "ckn: already running"`,
@@ -131,6 +142,79 @@ export const buildBlock = (rcPath: string, autostart: boolean): string => {
 }
 
 /**
+ * Upsert a single `KEY="value"` line into .env-style content. The value is always
+ * double-quoted — values like CKN_MESH_TOKEN_CMD contain spaces, which an unquoted
+ * `set -a; . .env` mis-parses. Idempotent (re-applying the same value is a no-op),
+ * updates in place when the key already exists, never duplicates, preserves all
+ * other lines. Keys are env-var names (word chars), so they need no regex escape.
+ */
+export const upsertEnvLine = (existing: string, key: string, value: string): string => {
+  const line = `${key}="${value}"`
+  const re = new RegExp(`^${key}=.*$`, 'm')
+  if (re.test(existing)) return existing.replace(re, line)
+  const sep = existing === '' || existing.endsWith('\n') ? '' : '\n'
+  return `${existing}${sep}${line}\n`
+}
+
+/**
+ * A fully-commented, secret-manager-AGNOSTIC `~/.claude/.env` scaffold. The public
+ * installer writes this only when no .env exists yet: it documents the env the shell
+ * helpers source but activates NOTHING — no live infra command baked into a public
+ * default. Users uncomment + set values for their own secret manager; a fleet passes
+ * an active value via `--mesh-token-cmd` instead.
+ */
+export const envTemplate = (): string =>
+  [
+    '# Cortex driver-node env — sourced by the shell helpers, so ckn-start (and the',
+    '# server it launches) inherit these. chmod 600. Quote any value with spaces.',
+    '#',
+    '# Runtime mesh-token fetch — enables hands-free off-VPN -> on-VPN auto-rejoin.',
+    '# A command that PRINTS the token to stdout; the token is never stored at rest.',
+    '# CKN_MESH_TOKEN_CMD="secret-run CKN_MESH_TOKEN -- printenv CKN_MESH_TOKEN"',
+    '#',
+    '# Surface your personality profile at session start (opt-in, default off):',
+    '# CKN_PROFILE=1',
+    '',
+  ].join('\n')
+
+/**
+ * Wire `~/.claude/.env` (which the shell block now sources). With `--mesh-token-cmd`,
+ * upsert an active QUOTED CKN_MESH_TOKEN_CMD; otherwise scaffold the commented agnostic
+ * template ONLY when no .env exists yet (never clobber an existing file).
+ */
+const ensureEnvFile = async (meshTokenCmd?: string): Promise<void> => {
+  const envPath = path.join(os.homedir(), '.claude', '.env')
+  if (meshTokenCmd) {
+    let cur = ''
+    try {
+      cur = await fs.readFile(envPath, 'utf-8')
+    } catch {
+      // .env doesn't exist yet — we'll create it.
+    }
+    const next = upsertEnvLine(cur, 'CKN_MESH_TOKEN_CMD', meshTokenCmd)
+    if (next === cur) {
+      console.log(`[ckn-install-aliases] CKN_MESH_TOKEN_CMD already set in ${envPath}`)
+      return
+    }
+    await fs.mkdir(path.dirname(envPath), { recursive: true })
+    await fs.writeFile(envPath, next, 'utf-8')
+    await fs.chmod(envPath, 0o600).catch(() => {})
+    console.log(`[ckn-install-aliases] wired CKN_MESH_TOKEN_CMD into ${envPath} (chmod 600)`)
+    return
+  }
+  // No flag: scaffold a commented template only if the file is absent.
+  try {
+    await fs.access(envPath)
+    return // exists — leave it untouched
+  } catch {
+    await fs.mkdir(path.dirname(envPath), { recursive: true })
+    await fs.writeFile(envPath, envTemplate(), 'utf-8')
+    await fs.chmod(envPath, 0o600).catch(() => {})
+    console.log(`[ckn-install-aliases] scaffolded a commented ${envPath} (no active values; chmod 600)`)
+  }
+}
+
+/**
  * Returns rc contents with the existing Cortex block (if any) removed.
  * Tolerant of either marker missing — defensive against hand-edits.
  */
@@ -153,6 +237,10 @@ const stripExistingBlock = (rc: string): string => {
 const main = async () => {
   const rcPath = detectRc()
   const autostart = process.argv.includes('--autostart')
+  const flagIdx = process.argv.indexOf('--mesh-token-cmd')
+  const meshTokenCmd = flagIdx >= 0 ? process.argv[flagIdx + 1] : undefined
+  // Wire ~/.claude/.env first so it happens even when the rc block is already current.
+  await ensureEnvFile(meshTokenCmd)
   const block = buildBlock(rcPath, autostart)
 
   let existing = ''

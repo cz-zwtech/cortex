@@ -138,6 +138,18 @@ ckn-stop                  # STOP the first-boot `npm start` before §3 — other
    local-only instead of failing** — and the node joins automatically once a token + a
    peer become reachable (no restart needed).
 
+   > **Hands-free auto-rejoin needs `CKN_MESH_TOKEN_CMD` in the *server's* env.** When
+   > the node booted without a token, the membership controller re-fetches one each tick
+   > by running this command — so an off-VPN→on-VPN transition rejoins with no restart.
+   > The shell helpers source `~/.claude/.env`, so put it there (chmod 600), **quoted**
+   > because it contains spaces:
+   > ```bash
+   > # ~/.claude/.env  (OpenBao users: swap secret-run for bao-run, per "the mesh token" above)
+   > CKN_MESH_TOKEN_CMD="secret-run CKN_MESH_TOKEN -- printenv CKN_MESH_TOKEN"
+   > ```
+   > The same file feeds `CKN_PROFILE` (§5). Without the command in the env, a node that
+   > came up local-only stays local-only until you re-run `ckn-start`.
+
 ## 4. Verify
 
 ```bash
