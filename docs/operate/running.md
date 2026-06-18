@@ -29,6 +29,13 @@ the server is what serves the UI and the fast API path.)
 
 After install, `source ~/.bashrc` (or open a new shell), then `ckn-start`.
 
+**One server per box.** Only one Cortex server can own port 3001, and the server
+now **self-guards**: a second launch detects the port is already owned and exits
+cleanly (`:3001 already in use … single-instance guard`) before it touches the
+graph — so racing `ckn-start`s or a stray `npm start` can't dogpile the port and
+wedge the server (and with it the bus). The canonical way to run/restart a single
+server directly is `npm run server` (non-watch) plus `bin/ckn-reboot` to cycle it.
+
 ### Make it start automatically
 
 Because `ckn-start` is guarded (it no-ops when already running), it's safe to run

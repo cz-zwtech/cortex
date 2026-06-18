@@ -25,6 +25,7 @@ import { setupPty } from './pty.js'
 import { setupWatcher } from './watcher.js'
 import { ensureStopHook } from './hookRegistrar.js'
 import { runMigrations } from './migrations.js'
+import { portAlreadyOwned, listenErrorAction } from './singleInstanceGuard.js'
 import { meshRouter } from './routes/mesh.js'
 import { meshUpgradeAuthorized } from './bus/meshAuth.js'
 import { stopMeshGossip } from './bus/meshGossip.js'
@@ -137,6 +138,26 @@ const PORT = Number(process.env.CKN_PORT ?? '3001')
 // public access." Don't expose to the public internet without putting
 // auth in front first.
 const BIND = process.env.CKN_BIND ?? '127.0.0.1'
+
+// Single-instance guard (bus-wedge hardening). A second server-stack launch on an
+// already-owned port used to dogpile :3001 and contend the graph lock — a wedged
+// server is a wedged bus. Exit cleanly BEFORE migrations/graph-lock so a loser never
+// touches the graph. See server/singleInstanceGuard.ts.
+const alreadyRunningMsg = `[ckn] :${PORT} already in use — another cortex is running. Exiting (single-instance guard).`
+if (await portAlreadyOwned(PORT)) {
+  console.log(alreadyRunningMsg)
+  process.exit(0)
+}
+// Race backstop: if the port was free at probe time but got bound in the TOCTOU
+// window, server.listen emits EADDRINUSE — exit cleanly rather than wedge. Any other
+// listen error is a genuine failure and must surface.
+server.on('error', (e: NodeJS.ErrnoException) => {
+  if (listenErrorAction(e.code) === 'exit') {
+    console.log(alreadyRunningMsg)
+    process.exit(0)
+  }
+  throw e
+})
 server.listen(PORT, BIND, async () => {
   const displayHost = BIND === '0.0.0.0' ? 'all interfaces' : BIND
   console.log(`[ckn] server ready on http://${BIND}:${PORT} (${displayHost})`)
