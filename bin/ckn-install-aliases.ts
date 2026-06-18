@@ -71,6 +71,8 @@ export const buildBlock = (rcPath: string, autostart: boolean): string => {
       `function ckn-graph-diff; cd ${projectRoot}; and ./node_modules/.bin/tsx bin/ckn-graph-diff.ts $argv; end`,
       // Opt-in statusline dots installer: ckn-statusline [--dots bus,mesh] [--yes].
       `function ckn-statusline; cd ${projectRoot}; and ./node_modules/.bin/tsx bin/ckn-statusline.ts $argv; end`,
+      // One-shot per-node update: pull latest + restart. ckn-update.
+      `function ckn-update; cd ${projectRoot}; and ./node_modules/.bin/tsx bin/ckn-update.ts $argv; end`,
       // Opt-in autostart: launch Cortex when an interactive shell opens. Safe to
       // run from every terminal — ckn-start no-ops if it's already up (port
       // guard), so the first shell after a reboot starts it and the rest don't
@@ -135,6 +137,8 @@ export const buildBlock = (rcPath: string, autostart: boolean): string => {
     `ckn-graph-diff() { ( cd ${projectRoot} && ./node_modules/.bin/tsx bin/ckn-graph-diff.ts "$@" ); }`,
     // Opt-in statusline dots installer: ckn-statusline [--dots bus,mesh] [--yes].
     `ckn-statusline() { ( cd ${projectRoot} && ./node_modules/.bin/tsx bin/ckn-statusline.ts "$@" ); }`,
+    // One-shot per-node update: pull latest + restart. ckn-update.
+    `ckn-update() { ( cd ${projectRoot} && ./node_modules/.bin/tsx bin/ckn-update.ts "$@" ); }`,
     // Opt-in autostart: launch Cortex when an interactive shell opens. Safe to
     // run from every terminal — ckn-start no-ops if it's already up (port
     // guard), so the first shell after a reboot starts it and the rest don't

@@ -51,6 +51,13 @@ const fish = buildBlock('/home/x/.config/fish/config.fish', false)
   ok('ckn-statusline alias generated for both bash and fish')
 }
 
+// ── ckn-update alias (the one per-node command that was missing) present in both shells ──
+{
+  assert.match(bash, /ckn-update\(\)\s*\{[^}]*ckn-update\.ts/, 'bash ckn-update alias')
+  assert.match(fish, /function ckn-update;[^]*ckn-update\.ts/, 'fish ckn-update alias')
+  ok('ckn-update alias generated for both bash and fish')
+}
+
 // ── a plain start must never wedge an unreachable node: no UNGUARDED bao-run ──
 {
   // every `bao-run ... npm start` must be the `exec` inside the conditional, never
