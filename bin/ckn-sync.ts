@@ -13,6 +13,7 @@
  *      - unbound → no server; safe to fall back to direct DB.
  *   3. CKN_FORCE_SERVER=1 still forces fail-loud even when no server detected.
  */
+import path from 'node:path'
 import { SERVER_URL, SERVER_PORT, isServerUp } from './_graph-guard.js'
 import { memoryHome } from '../server/graph/sync.js'
 
@@ -84,9 +85,39 @@ const triggerDeriveDetached = (): void => {
     .catch(() => clearTimeout(t))
 }
 
+/**
+ * Keep each MEMORY.md under the harness auto-memory load cap (FR #119). The native
+ * auto-memory loads only the first ~200 lines / 25KB of MEMORY.md, so a growing
+ * index silently drops its back half from every session. Archive completed pointers
+ * to a sibling MEMORY-archive.md (not auto-loaded; the memories stay in the graph),
+ * and warn loudly if the index is still over the cap afterward. Runs after a
+ * successful sync so the graph already has everything being archived.
+ */
+async function pruneIndexes(): Promise<void> {
+  const { memoryIndexPaths, applyIndexPrune } = await import('../server/graph/memoryIndexCap.js')
+  for (const p of await memoryIndexPaths(memoryHome())) {
+    const r = await applyIndexPrune(p)
+    if (!r) continue
+    const where = path.basename(path.dirname(path.dirname(p))) // the scope dir name
+    if (r.archivedCount > 0) {
+      console.log(
+        `[ckn sync] memory index (${where}): archived ${r.archivedCount} completed pointer(s) → MEMORY-archive.md (kept ${r.keptLines} lines / ${r.keptBytes}B)`,
+      )
+    }
+    if (r.overCap) {
+      console.warn(
+        `[ckn sync] ⚠ ${p}\n` +
+          `  still over the harness auto-memory load cap (${r.keptLines} lines / ${r.keptBytes}B > ~200 lines / 25KB) after archiving completed pointers.\n` +
+          `  The back half won't load each session — manually prune some pinned/active pointers.`,
+      )
+    }
+  }
+}
+
 async function main() {
   if (await syncViaApi()) {
     triggerDeriveDetached()
+    await pruneIndexes()
     return
   }
 
@@ -112,6 +143,7 @@ async function main() {
   }
 
   await syncDirect()
+  await pruneIndexes()
 }
 
 main().catch((e) => {

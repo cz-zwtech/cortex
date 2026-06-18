@@ -3,6 +3,7 @@ import { graphRecall, type RecallHit } from '../graph/recall.js'
 import { recordSurface } from '../usageScores.js'
 import { recordSurfacings } from '../graph/surfacings.js'
 import { ancestorProjectScopes } from '../graph/projectScopes.js'
+import { bucketOperational } from '../graph/operationalRecall.js'
 
 export const recallRouter = Router()
 
@@ -117,19 +118,14 @@ recallRouter.post('/', async (req, res) => {
     //                   tool call dragging in loosely-related memories.
     const patterns: RecallHit[] = []
     const shared: RecallHit[] = []
-    const operational: RecallHit[] = []
-    const OPERATIONAL_MIN_COSINE = 0.45
     for (const hit of all) {
       if (hit.source === 'pattern' && patterns.length < 5) patterns.push(hit)
       else if (hit.source === 'shared' && shared.length < 5) shared.push(hit)
-      else if (
-        hit.source === 'memory' &&
-        operational.length < 5 &&
-        (hit.signals.cosine != null && hit.signals.cosine >= OPERATIONAL_MIN_COSINE)
-      ) {
-        operational.push(hit)
-      }
     }
+    // operational: native-scope "how to operate this tool" memories. Session-state
+    // snapshots are excluded and standing rules (ALWAYS/NEVER) are pulled to the
+    // front so they survive the top-N cap (#119); still cosine-gated for precision.
+    const operational = bucketOperational(all)
 
     // Phase 5: every hit returned counts as a surface — record it so
     // graphRecall can use historical surface counts to bias future
