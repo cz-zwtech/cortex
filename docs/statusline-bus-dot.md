@@ -11,11 +11,15 @@ you already maintain:
   the current session (so peer / cross-machine messages arrive in real time), or a
   red `● bus off` when it isn't (messages then only land at prompt boundaries until
   you arm the watcher).
-- **mesh dot** — a green `● mesh` when this node has at least one **live** mesh
-  link (an open cross-machine WS connection), dim when the mesh is armed but not yet
-  connected, and nothing when the mesh is off. It reads the `live` field from the
-  local `/api/bus/mesh-status` diagnostic — distinct from `enabled` (armed), so it
-  shows a *real* connection, not just configured intent.
+- **mesh dot** — a **binary, link-aware** "am I on the mesh" signal (not a peer
+  count): green `● mesh` when the tier is live with at least one live link, red
+  `● mesh…` when armed but not yet connected (token/VPN not up), yellow `○ local`
+  when the mesh is off by choice, dim `○ mesh` when the local server can't be
+  reached. It reads `enabled` + `live` + (`wsLinks[].connected` OR a reachable
+  canonical-http `peers[]`) from the local `/api/bus/mesh-status` diagnostic. A
+  count is deliberately avoided: a NAT'd node (WSL / a laptop on its own LAN)
+  reaches the fleet by relaying through a hub, so a direct-dial reachable count
+  shows 1-of-N even when the whole fleet is up — link-aware avoids that lie.
 
 Both are copy-paste snippets, not shipped files. Add only the dot(s); the rest of
 your statusline stays yours.
@@ -74,8 +78,16 @@ Everything else in your statusline is yours; this only adds the dot.
 
 ### No statusline yet?
 
-If you have no statusline at all and want a minimal, dot-only one, create a
-script that prints just the bus segment and point `statusLine` at it yourself:
+The quickest path is the opt-in installer: **`ckn-statusline`** (added by
+`npm run install-aliases`). With no statusline configured it offers to scaffold a
+minimal, Cortex-dots-only script at `~/.config/ckn/statusline.sh` and wire the
+`statusLine` key — only on your explicit consent (`--yes`, or an interactive yes).
+If you already have a statusline it prints the paste-in snippet instead and never
+touches your file. Pick the dots with `--dots bus,mesh` (default both). Cortex
+writes nothing unless you opt in.
+
+Prefer to do it by hand? Create a script that prints just the segment and point
+`statusLine` at it yourself:
 
 ```bash
 #!/bin/bash
@@ -89,50 +101,53 @@ else printf '%b\n' "${RED}● bus off${RST}"; fi
 
 Then set it in `~/.claude/settings.json` yourself:
 `"statusLine": { "type": "command", "command": "bash ~/.claude/your-statusline.sh" }`.
-Cortex will not do this for you.
+By hand, Cortex won't touch your `settings.json` — that's what `ckn-statusline`
+automates, on consent.
 
 ## The mesh dot snippet
 
 The mesh dot reads the **local, auth-free** `/api/bus/mesh-status` diagnostic and
-keys off its `live` field — true only when at least one mesh WS link is actually
-OPEN. `enabled` (armed by config) is *not* the same as a live connection, so the
-dot reflects reality, not intent.
+shows the OUTCOME of the membership tick, not just configured intent: it keys off
+`enabled` (armed), `live` (the tier is up), and whether there is **at least one live
+link** — a connected `wsLinks[]` OR a reachable canonical-http `peers[]`. It counts
+links, not peers, and shows no number: a NAT'd node relays through a hub, so a
+direct-dial reachable count reads 1-of-N even with the fleet up. `enabled` alone is
+*not* a connection — the dot distinguishes armed-but-retrying from connected.
 
 ```bash
-# --- Cortex mesh dot: live cross-machine link indicator ---------------------
-# Echoes one of: live | armed | off | down. Auth-free local read (1s cap).
-cortex_mesh_state() {
-  local j
-  j=$(curl -s --max-time 1 http://localhost:3001/api/bus/mesh-status 2>/dev/null) || { echo down; return; }
-  [ -z "$j" ] && { echo down; return; }
-  if [ "$(printf '%s' "$j" | jq -r '.enabled')" = true ]; then
-    [ "$(printf '%s' "$j" | jq -r '.live')" = true ] && echo live || echo armed
+# --- Cortex mesh dot: binary, link-aware "on the mesh?" ---------------------
+# Needs the color vars below in scope. jq + curl; one bounded local read (~9ms),
+# never a tsx/ckn-bus spawn — a statusline runs on every prompt.
+GREEN='\033[32m'; YELLOW='\033[33m'; RED='\033[31m'; DIM='\033[2m'; RST='\033[0m'
+mesh_seg() {
+  local j enabled live linked
+  j=$(curl -s --max-time 1 http://localhost:3001/api/bus/mesh-status 2>/dev/null)
+  [ -z "$j" ] && { printf '%s' "${DIM}○ mesh${RST}"; return; }
+  enabled=$(printf '%s' "$j" | jq -r '.enabled // false')
+  live=$(printf '%s' "$j" | jq -r '.live // false')
+  linked=$(printf '%s' "$j" | jq -r '[(.wsLinks[]?|select(.connected==true)), (.peers[]?|select(.reachable==true and (.url|startswith("http"))))] | length')
+  if [ "$enabled" = "true" ] && [ "$live" = "true" ] && [ "${linked:-0}" -ge 1 ]; then
+    printf '%s' "${GREEN}● mesh${RST}"
+  elif [ "$enabled" = "true" ]; then
+    printf '%s' "${RED}● mesh…${RST}"
   else
-    echo off
+    printf '%s' "${YELLOW}○ local${RST}"
   fi
 }
-
-# Render the dot: green when live, dim when armed-but-not-connected, hidden otherwise.
-GREEN='\033[32m'; DIM='\033[2m'; RST='\033[0m'
-case "$(cortex_mesh_state)" in
-  live)  MESH_SEG="${GREEN}● mesh${RST}" ;;
-  armed) MESH_SEG="${DIM}● mesh${RST}" ;;   # enabled, no live link yet
-  *)     MESH_SEG="" ;;                       # off / server down → show nothing
-esac
+MESH_SEG=$(mesh_seg)
 # ...then include "$MESH_SEG" wherever you want it in your printf line.
 # --- end Cortex mesh dot ----------------------------------------------------
 ```
 
-Add it exactly like the bus dot: paste the function and the `MESH_SEG` block into
-your statusline script and reference `$MESH_SEG` in your `printf` line — don't
-replace your line. It needs `jq` (already used to parse the stdin JSON) and `curl`.
-Unlike the bus dot it makes one local HTTP call per render; the 1s cap means a
-stopped server costs at most a second and just hides the dot.
-
-**Offer it once the mesh has connected.** Until this node has joined the mesh and
-made its first link, `live` stays false and the dot sits dim — so the indicator
-earns its place after a first validated connection. Before that, the bus dot alone
-is the more meaningful signal.
+The four states: green `● mesh` (connected — directly or via a relay hub), red
+`● mesh…` (armed but the tick is retrying — token/VPN not up), yellow `○ local`
+(mesh off by choice), dim `○ mesh` (local server unreachable, can't determine). Add
+it exactly like the bus dot: paste the function and the `MESH_SEG` line into your
+statusline script and reference `$MESH_SEG` in your `printf` line — don't replace
+your line. It needs `jq` (already used to parse the stdin JSON) and `curl`. Unlike
+the bus dot it makes one local HTTP call per render; the 1s cap means a stopped
+server costs at
+most a second and shows the dim dot.
 
 ## Prompt for an installing assistant
 
@@ -143,8 +158,10 @@ If an LLM is helping set up Cortex, this is the instruction to give it:
 > it, and never write the `statusLine` key in their `settings.json` on their behalf
 > (that's their call). For the **bus dot**, read their current statusline and insert
 > the `bus_watcher_armed` function and a `${BUS_SEG}` reference into their existing
-> output line. For the **mesh dot**, insert `cortex_mesh_state` and a `${MESH_SEG}`
-> reference the same way — but only offer it once this node has made a first live
-> mesh connection (before that the dot just sits dim). Leave everything else
-> untouched. If they have no statusline and want one, offer the minimal dot-only
-> script above and let them wire it up.
+> output line. For the **mesh dot**, insert the `mesh_seg` function and a
+> `${MESH_SEG}` reference the same way — it shows green `● mesh` when connected
+> (directly or via a relay hub), red `● mesh…` when armed-but-retrying, yellow
+> `○ local` when off, dim `○ mesh` when
+> the server is unreachable. Leave everything else untouched. If they have no
+> statusline and want one, offer the minimal dot-only script above and let them wire
+> it up.

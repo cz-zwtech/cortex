@@ -44,6 +44,13 @@ const fish = buildBlock('/home/x/.config/fish/config.fish', false)
   ok('ckn-mesh alias generated for both bash and fish')
 }
 
+// ── ckn-statusline alias (FR-B: the opt-in dots installer) present in both shells ──
+{
+  assert.match(bash, /ckn-statusline\(\)\s*\{[^}]*ckn-statusline\.ts/, 'bash ckn-statusline alias')
+  assert.match(fish, /function ckn-statusline;[^]*ckn-statusline\.ts/, 'fish ckn-statusline alias')
+  ok('ckn-statusline alias generated for both bash and fish')
+}
+
 // ── a plain start must never wedge an unreachable node: no UNGUARDED bao-run ──
 {
   // every `bao-run ... npm start` must be the `exec` inside the conditional, never

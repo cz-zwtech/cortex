@@ -69,6 +69,8 @@ export const buildBlock = (rcPath: string, autostart: boolean): string => {
       `function ckn-blast; cd ${projectRoot}; and ./node_modules/.bin/tsx bin/ckn-blast.ts $argv; end`,
       // Graph branch-diff: ckn-graph-diff <repo|path> <branchA> <branchB> (competing changes first).
       `function ckn-graph-diff; cd ${projectRoot}; and ./node_modules/.bin/tsx bin/ckn-graph-diff.ts $argv; end`,
+      // Opt-in statusline dots installer: ckn-statusline [--dots bus,mesh] [--yes].
+      `function ckn-statusline; cd ${projectRoot}; and ./node_modules/.bin/tsx bin/ckn-statusline.ts $argv; end`,
       // Opt-in autostart: launch Cortex when an interactive shell opens. Safe to
       // run from every terminal — ckn-start no-ops if it's already up (port
       // guard), so the first shell after a reboot starts it and the rest don't
@@ -131,6 +133,8 @@ export const buildBlock = (rcPath: string, autostart: boolean): string => {
     `ckn-blast() { ( cd ${projectRoot} && ./node_modules/.bin/tsx bin/ckn-blast.ts "$@" ); }`,
     // Graph branch-diff: ckn-graph-diff <repo|path> <branchA> <branchB> (competing changes first).
     `ckn-graph-diff() { ( cd ${projectRoot} && ./node_modules/.bin/tsx bin/ckn-graph-diff.ts "$@" ); }`,
+    // Opt-in statusline dots installer: ckn-statusline [--dots bus,mesh] [--yes].
+    `ckn-statusline() { ( cd ${projectRoot} && ./node_modules/.bin/tsx bin/ckn-statusline.ts "$@" ); }`,
     // Opt-in autostart: launch Cortex when an interactive shell opens. Safe to
     // run from every terminal — ckn-start no-ops if it's already up (port
     // guard), so the first shell after a reboot starts it and the rest don't
@@ -270,6 +274,10 @@ const main = async () => {
   )
   console.log(`[ckn-install-aliases] re-source the file or open a new shell:`)
   console.log(`[ckn-install-aliases]   source ${rcPath}`)
+  // Opt-in nudge: surface the statusline dots without shipping/forcing one (ship-none).
+  console.log(
+    `[ckn-install-aliases] optional: run \`ckn-statusline\` to add a bus + mesh dot to your statusline (Cortex ships none by default).`,
+  )
 }
 
 // Only auto-run when invoked as the entry script (`tsx bin/ckn-install-aliases.ts`),
