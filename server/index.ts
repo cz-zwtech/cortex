@@ -294,12 +294,27 @@ server.listen(PORT, BIND, async () => {
       const status = await mindStatus()
       if (status.enabled) {
         const { withGraphWriteLock } = await import('./graph/db.js')
-        const { syncMemories, memoryHome } = await import('./graph/sync.js')
+        const { syncMemories, memoryHome, backfillEmbeddings } = await import('./graph/sync.js')
         const pushOnBoot = process.env.CKN_MIND_PUSH_ON_BOOT === '1'
         const report = await mindSync({ push: pushOnBoot })
         if (report.enabled) {
-          await withGraphWriteLock('mind-reindex-startup', () => syncMemories(memoryHome()))
+          const reindex = await withGraphWriteLock('mind-reindex-startup', () =>
+            syncMemories(memoryHome(), { deferEmbeddings: true }),
+          )
           report.duplicates = await detectDuplicates(changedLocalPaths(report))
+          // #123(c): the embedding backfill runs OUTSIDE the write lock so the boot
+          // re-index never freezes the graph/bus (the prior wedge). Parallel + bounded;
+          // a crash mid-backfill self-heals — the vector-present fast-path guard
+          // re-embeds anything still missing on the next sync.
+          if (reindex.embedQueue.length > 0) {
+            console.log(
+              `[ckn] embeddings: backfilling ${reindex.embedQueue.length} memories in the background ` +
+                `(set CKN_EMBEDDINGS=off to skip on a slow first boot)`,
+            )
+            void backfillEmbeddings(reindex.embedQueue).then((r) =>
+              console.log(`[ckn] embeddings backfill complete: ${r.embedded} embedded, ${r.failed} deferred`),
+            )
+          }
         }
         const n = report.adopted.length + report.pushedFiles.length + report.conflicts.length
         console.log(
