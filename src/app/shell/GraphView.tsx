@@ -8,6 +8,7 @@ import { useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import * as d3 from 'd3'
 import { useStore } from '@/app/store'
 import { graphSymbolGraph, type GraphLink, type GraphNode, type GraphEdge } from '@/adapters/graph'
+import { nodeHighlight, textOpacity, edgeHighlight, setsEqual } from './graphHighlight'
 
 // Tone for cluster colors — phos / amber / rose / cyan / dim per spec.
 const KIND_TONE: Record<string, string> = {
@@ -70,6 +71,19 @@ function GraphCanvas({
   const svgRef = useRef<SVGSVGElement>(null)
   const [dims, setDims] = useState({ width: 0, height: 0 })
 
+  // #122(b): hold onNodeClick in a ref so buildGraph does NOT depend on its identity
+  // — a fresh inline arrow from the parent each render must not tear down + cold-
+  // restart the whole force simulation. The click handler reads the latest via the ref.
+  const onNodeClickRef = useRef(onNodeClick)
+  onNodeClickRef.current = onNodeClick
+  // #122(c): retained d3 selections so the highlight effect restyles in place (scoped
+  // to the affected elements) instead of re-querying the whole SVG with svg.selectAll.
+  const nodeSelRef = useRef<d3.Selection<SVGGElement, SimNode, SVGGElement, unknown> | null>(null)
+  const linkSelRef = useRef<d3.Selection<SVGLineElement, SimEdge, SVGGElement, unknown> | null>(null)
+  const prevActiveRef = useRef<string | null>(null)
+  const prevKindsRef = useRef<Set<string>>(new Set())
+  const needsFullRestyleRef = useRef(true)
+
   // Measure
   useEffect(() => {
     const el = containerRef.current
@@ -129,7 +143,7 @@ function GraphCanvas({
       .data(simNodes)
       .join('g')
       .attr('cursor', 'pointer')
-      .on('click', (_event, d) => onNodeClick(d.id))
+      .on('click', (_event, d) => onNodeClickRef.current(d.id))
 
     node
       .append('circle')
@@ -251,10 +265,16 @@ function GraphCanvas({
       node.attr('transform', (d) => `translate(${d.x ?? 0},${d.y ?? 0})`)
     })
 
+    // Retain the selections for the highlight effect + force its next pass to be a
+    // FULL restyle (the DOM was just rebuilt).
+    nodeSelRef.current = node
+    linkSelRef.current = link
+    needsFullRestyleRef.current = true
+
     return () => {
       sim.stop()
     }
-  }, [nodes, edges, dims, layout, onNodeClick])
+  }, [nodes, edges, dims, layout])
 
   useEffect(() => {
     const cleanup = buildGraph()
@@ -262,59 +282,68 @@ function GraphCanvas({
   }, [buildGraph])
 
   // Highlight selected node + its edges; cluster filter dims non-matching nodes.
+  // Restyles the RETAINED selections in place — scoped to the affected elements on a
+  // selection-only change — instead of re-querying the whole SVG with svg.selectAll
+  // and restyling every element on every selection/filter change.
   useEffect(() => {
-    if (!svgRef.current) return
-    const svg = d3.select(svgRef.current)
+    const nodeSel = nodeSelRef.current
+    const linkSel = linkSelRef.current
+    if (!nodeSel || !linkSel) return
+
     const activeNode = nodes.find((n) => n.id === activeId)
     const activeTone = activeNode ? toneFor(activeNode.kind) : null
-    const hasClusterFilter = highlightedKinds.size > 0
 
-    const isHighlighted = (d: SimNode) =>
-      !hasClusterFilter || highlightedKinds.has(d.kind)
+    const styleNodes = (sel: d3.Selection<SVGGElement, SimNode, SVGGElement, unknown>) => {
+      sel
+        .select<SVGCircleElement>('circle')
+        .attr('stroke-width', (d) => nodeHighlight(d.id, d.kind, activeId, highlightedKinds).strokeWidth)
+        .attr('fill-opacity', (d) => nodeHighlight(d.id, d.kind, activeId, highlightedKinds).fillOpacity)
+        .attr('r', (d) => nodeHighlight(d.id, d.kind, activeId, highlightedKinds).r)
+        .style('opacity', (d) => nodeHighlight(d.id, d.kind, activeId, highlightedKinds).opacity)
+        .style('filter', (d) =>
+          d.id === activeId ? `drop-shadow(0 0 14px ${toneFor(d.kind)})` : 'none',
+        )
+      sel.select<SVGTextElement>('text').style('opacity', (d) => textOpacity(d.kind, highlightedKinds))
+    }
 
-    svg
-      .selectAll<SVGCircleElement, SimNode>('circle')
-      .attr('stroke-width', (d) => (d.id === activeId ? 2.5 : 1.4))
-      .attr('fill-opacity', (d) => {
-        if (d.id === activeId) return 0.4
-        return isHighlighted(d) ? 0.18 : 0.05
-      })
-      .attr('r', (d) => (d.id === activeId ? 9 : 7))
-      .style('opacity', (d) => (isHighlighted(d) ? 1 : 0.25))
-      .style('filter', (d) =>
-        d.id === activeId ? `drop-shadow(0 0 14px ${toneFor(d.kind)})` : 'none',
-      )
+    const styleEdges = (sel: d3.Selection<SVGLineElement, SimEdge, SVGGElement, unknown>) => {
+      const hl = (d: SimEdge) =>
+        edgeHighlight(
+          (d.source as SimNode).id,
+          (d.target as SimNode).id,
+          (d.source as SimNode).kind,
+          (d.target as SimNode).kind,
+          activeId,
+          highlightedKinds,
+        )
+      sel
+        .attr('stroke', (d) => (hl(d).touchesActive && activeTone ? activeTone : '#2a3158'))
+        .attr('stroke-opacity', (d) => hl(d).strokeOpacity)
+        .attr('stroke-width', (d) => hl(d).strokeWidth)
+    }
 
-    svg
-      .selectAll<SVGTextElement, SimNode>('text')
-      .style('opacity', (d) => (isHighlighted(d) ? 0.95 : 0.2))
+    // A cluster-filter change affects every element → full restyle. A selection-only
+    // change touches just the previously- and newly-active node + their incident edges.
+    const full = needsFullRestyleRef.current || !setsEqual(prevKindsRef.current, highlightedKinds)
+    if (full) {
+      styleNodes(nodeSel)
+      styleEdges(linkSel)
+    } else {
+      const prevActive = prevActiveRef.current
+      const touched = (id: string | null) => id === activeId || id === prevActive
+      styleNodes(nodeSel.filter((d) => touched(d.id)))
+      styleEdges(linkSel.filter((d) => touched((d.source as SimNode).id) || touched((d.target as SimNode).id)))
+    }
 
-    svg
-      .selectAll<SVGLineElement, SimEdge>('line')
-      .attr('stroke', (d) => {
-        const a = (d.source as SimNode).id
-        const b = (d.target as SimNode).id
-        if (activeId && (a === activeId || b === activeId) && activeTone) return activeTone
-        return '#2a3158'
-      })
-      .attr('stroke-opacity', (d) => {
-        const a = (d.source as SimNode).id
-        const b = (d.target as SimNode).id
-        const touchesActive = activeId && (a === activeId || b === activeId)
-        const touchesFilter =
-          hasClusterFilter &&
-          (highlightedKinds.has((d.source as SimNode).kind) ||
-            highlightedKinds.has((d.target as SimNode).kind))
-        if (touchesActive) return 0.9
-        if (hasClusterFilter && !touchesFilter) return 0.1
-        return 0.55
-      })
-      .attr('stroke-width', (d) => {
-        const a = (d.source as SimNode).id
-        const b = (d.target as SimNode).id
-        return activeId && (a === activeId || b === activeId) ? 1.4 : 1
-      })
-  }, [activeId, nodes, highlightedKinds])
+    prevActiveRef.current = activeId ?? null
+    prevKindsRef.current = new Set(highlightedKinds)
+    needsFullRestyleRef.current = false
+    // Include every buildGraph rebuild trigger (nodes/edges/dims/layout), not just
+    // the selection/filter inputs: a rebuild from a resize or layout toggle installs
+    // fresh selections + needsFullRestyle, so the highlight effect MUST re-run to
+    // re-apply the active/filter styling onto the new DOM (else it's lost until the
+    // next selection change).
+  }, [activeId, nodes, edges, dims, layout, highlightedKinds])
 
   return (
     <div
