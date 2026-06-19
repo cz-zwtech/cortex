@@ -206,3 +206,7 @@ export const embeddedIdSet = async (): Promise<Set<string>> => {
   const store = await loadStore()
   return new Set(store.keys())
 }
+
+/** #127: the full in-memory vector store (id -> vector) for the kNN similarity pass.
+ *  Returns the live cache — READ-ONLY; callers must not mutate the returned map. */
+export const allEmbeddings = async (): Promise<Map<string, Float32Array>> => loadStore()
