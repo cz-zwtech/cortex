@@ -32,4 +32,37 @@ export CKN_EMBEDDINGS=off    # then ckn-stop && ckn-start
 The mode is decided once at server boot and cached for the process lifetime.
 
 
+## Similarity edges (kNN connectivity enrichment)
+
+Cortex auto-links memories by literal name-mention + explicit frontmatter, which leaves
+many entries with few or no edges. When embeddings are on, a sync-time pass adds
+**SIMILAR_TO** edges from each entry to its nearest semantic neighbours (cosine over the
+sidecar vectors), so the graph reflects meaning, not just naming — and recall, which walks
+edges, gets richer 1-hop expansion. The cosine is stored on the edge `weight`; recall
+scales the similarity bonus by it (a closer neighbour ranks higher), and it composes
+normally with recency decay + supersession.
+
+Tunable and off-able (all read at use):
+
+| Var | Default | Meaning |
+|---|---|---|
+| `CKN_SIMILARITY` | on | Set `off` to disable similarity edges (independent of embeddings). |
+| `CKN_SIMILARITY_K` | 5 | Neighbours kept per source. |
+| `CKN_SIMILARITY_THRESHOLD` | 0.55 | Minimum cosine for an edge. |
+| `CKN_SIMILARITY_MAX_INDEGREE` | 15 | Cap inbound edges per target (hub guard). |
+| `CKN_SIMILARITY_MAX_N` | 20000 | Above this many embedded entries the O(n²) pass is skipped (ANN deferred). |
+
+**Incremental, with a heal.** Each sync recomputes SIMILAR_TO only for the entries
+(re)embedded that sync — cheap. Because an unchanged neighbour's top-K is *not*
+recomputed when some other entry changes, the edge set can drift slightly over time. That
+drift is acceptable for an enrichment edge and is healed by a full rebuild:
+
+```bash
+curl -sX POST localhost:3001/api/graph/similarity/rebuild
+```
+
+Run it after first enabling the feature (to bootstrap edges over an already-embedded
+corpus) or periodically to re-true the graph. The boot re-index defers embeddings, so
+similarity is materialized by the first normal sync or this rebuild, not at boot.
+
 Related: [[cortex-memory-pipeline]] · [[cortex-recall]] · [[cortex-configuration]]

@@ -13,6 +13,7 @@ import {
   pruneStubs,
   pruneOrphanStubs,
   getAllForGraph,
+  materializeSimilarityEdges,
 } from '../graph/sync.js'
 import { triggerTurnSync } from '../graph/turnSync.js'
 import { applyLinkageBackfill } from '../migrations.js'
@@ -43,6 +44,8 @@ import {
 import { mindStatus, persistCodegraphSnapshot, forgetCodegraphSnapshot } from '../privateMind.js'
 import { seedOnboardingLocal } from '../onboarding/seed.js'
 import { recallForFile } from '../graph/recall.js'
+import { similarityEnabled } from '../graph/similarity.js'
+import { getEmbeddingMode } from '../embeddings.js'
 import { recordSurfacings } from '../graph/surfacings.js'
 import {
   OPEN_STATUSES,
@@ -435,6 +438,24 @@ graphRouter.get('/all', async (_req, res) => {
   try {
     const data = await getAllForGraph()
     res.json(data)
+  } catch (e: any) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// POST /api/graph/similarity/rebuild — #127: recompute ALL kNN SIMILAR_TO edges from the
+// embedding sidecar. The incremental sync pass only recomputes changed sources, so a
+// neighbour's top-K can go stale when an unrelated entry changes; this full rebuild heals
+// that bounded drift (and bootstraps the edges when the feature is first enabled). No-op
+// when similarity is disabled (embeddings off or CKN_SIMILARITY=off).
+graphRouter.post('/similarity/rebuild', async (_req, res) => {
+  try {
+    if (!similarityEnabled(getEmbeddingMode())) {
+      res.json({ ok: false, reason: 'similarity disabled (embeddings off or CKN_SIMILARITY=off)' })
+      return
+    }
+    const result = await withGraphWriteLock('similarity-rebuild', () => materializeSimilarityEdges(null))
+    res.json({ ok: true, ...result })
   } catch (e: any) {
     res.status(500).json({ error: e.message })
   }
