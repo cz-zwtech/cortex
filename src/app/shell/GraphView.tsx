@@ -9,6 +9,7 @@ import * as d3 from 'd3'
 import { useStore } from '@/app/store'
 import { graphSymbolGraph, type GraphLink, type GraphNode, type GraphEdge } from '@/adapters/graph'
 import { nodeHighlight, textOpacity, edgeHighlight, setsEqual } from './graphHighlight'
+import { relColor, relVisible } from './graphEdgeStyle'
 
 // Tone for cluster colors — phos / amber / rose / cyan / dim per spec.
 const KIND_TONE: Record<string, string> = {
@@ -45,6 +46,7 @@ interface SimNode extends d3.SimulationNodeDatum {
 }
 
 interface SimEdge extends d3.SimulationLinkDatum<SimNode> {
+  rel?: string
   label: string
 }
 
@@ -57,13 +59,15 @@ function GraphCanvas({
   edges,
   activeId,
   highlightedKinds,
+  highlightedRels,
   layout,
   onNodeClick,
 }: {
   nodes: (SimNode & { syncedAt?: number; updatedAt?: number })[]
-  edges: { from: string; to: string; label: string }[]
+  edges: { from: string; to: string; rel?: string; label?: string }[]
   activeId: string | null
   highlightedKinds: Set<string>
+  highlightedRels: Set<string>
   layout: Layout
   onNodeClick: (id: string) => void
 }) {
@@ -82,6 +86,7 @@ function GraphCanvas({
   const linkSelRef = useRef<d3.Selection<SVGLineElement, SimEdge, SVGGElement, unknown> | null>(null)
   const prevActiveRef = useRef<string | null>(null)
   const prevKindsRef = useRef<Set<string>>(new Set())
+  const prevRelsRef = useRef<Set<string>>(new Set())
   const needsFullRestyleRef = useRef(true)
 
   // Measure
@@ -114,7 +119,8 @@ function GraphCanvas({
       .map((e) => ({
         source: nodeById.get(e.from)!,
         target: nodeById.get(e.to)!,
-        label: e.label,
+        rel: e.rel,
+        label: e.label ?? '',
       }))
       .filter((e) => e.source && e.target)
 
@@ -132,7 +138,7 @@ function GraphCanvas({
       .selectAll<SVGLineElement, SimEdge>('line')
       .data(simEdges)
       .join('line')
-      .attr('stroke', '#2a3158')
+      .attr('stroke', (d) => relColor(d.rel ?? ''))
       .attr('stroke-width', 1)
       .attr('stroke-opacity', 0.55)
 
@@ -317,14 +323,22 @@ function GraphCanvas({
           highlightedKinds,
         )
       sel
-        .attr('stroke', (d) => (hl(d).touchesActive && activeTone ? activeTone : '#2a3158'))
-        .attr('stroke-opacity', (d) => hl(d).strokeOpacity)
+        .attr('stroke', (d) => (hl(d).touchesActive && activeTone ? activeTone : relColor(d.rel ?? '')))
+        // The per-rel filter hides only edges that HAVE a rel and are filtered out;
+        // overlay edges without a rel stay governed by the showCode toggle, never the
+        // rel filter. Default (empty filter) shows everything — Corey's intent.
+        .attr('stroke-opacity', (d) =>
+          d.rel !== undefined && !relVisible(d.rel, highlightedRels) ? 0 : hl(d).strokeOpacity,
+        )
         .attr('stroke-width', (d) => hl(d).strokeWidth)
     }
 
     // A cluster-filter change affects every element → full restyle. A selection-only
     // change touches just the previously- and newly-active node + their incident edges.
-    const full = needsFullRestyleRef.current || !setsEqual(prevKindsRef.current, highlightedKinds)
+    const full =
+      needsFullRestyleRef.current ||
+      !setsEqual(prevKindsRef.current, highlightedKinds) ||
+      !setsEqual(prevRelsRef.current, highlightedRels)
     if (full) {
       styleNodes(nodeSel)
       styleEdges(linkSel)
@@ -337,13 +351,14 @@ function GraphCanvas({
 
     prevActiveRef.current = activeId ?? null
     prevKindsRef.current = new Set(highlightedKinds)
+    prevRelsRef.current = new Set(highlightedRels)
     needsFullRestyleRef.current = false
     // Include every buildGraph rebuild trigger (nodes/edges/dims/layout), not just
     // the selection/filter inputs: a rebuild from a resize or layout toggle installs
     // fresh selections + needsFullRestyle, so the highlight effect MUST re-run to
     // re-apply the active/filter styling onto the new DOM (else it's lost until the
     // next selection change).
-  }, [activeId, nodes, edges, dims, layout, highlightedKinds])
+  }, [activeId, nodes, edges, dims, layout, highlightedKinds, highlightedRels])
 
   return (
     <div
@@ -368,6 +383,9 @@ function GraphControls({
   clusterCounts,
   highlightedKinds,
   onToggleKind,
+  relCounts,
+  highlightedRels,
+  onToggleRel,
   layout,
   onSetLayout,
   totalNodes,
@@ -380,6 +398,9 @@ function GraphControls({
   clusterCounts: { kind: string; count: number }[]
   highlightedKinds: Set<string>
   onToggleKind: (kind: string) => void
+  relCounts: { rel: string; count: number }[]
+  highlightedRels: Set<string>
+  onToggleRel: (rel: string) => void
   layout: Layout
   onSetLayout: (l: Layout) => void
   totalNodes: number
@@ -395,6 +416,7 @@ function GraphControls({
     { k: 'temporal', label: 'temporal' },
   ]
   const hasFilter = highlightedKinds.size > 0
+  const hasRelFilter = highlightedRels.size > 0
   return (
     <aside
       className="shrink-0 border-r border-[var(--color-line)] flex flex-col"
@@ -443,6 +465,43 @@ function GraphControls({
             clear filter
           </button>
         )}
+      </div>
+
+      <div className="border-t border-[var(--color-line)] px-3.5 py-2.5">
+        <span className="t-ghost text-[10px] tracking-[0.25em]">// RELATIONS</span>
+        <div className="mt-1.5">
+          {relCounts.map(({ rel, count }) => {
+            const on = highlightedRels.has(rel)
+            const dimmed = hasRelFilter && !on
+            return (
+              <button
+                key={rel}
+                onClick={() => onToggleRel(rel)}
+                className="w-full flex items-center justify-between text-[11px] py-1 transition-colors hover:text-[color:var(--color-pale)]"
+                style={{
+                  color: dimmed ? 'var(--color-dim)' : 'var(--color-mid)',
+                  opacity: dimmed ? 0.55 : 1,
+                }}
+                title={on ? `Clear ${rel} filter` : `Show only ${rel} edges`}
+              >
+                <span>
+                  <span style={{ color: dimmed ? 'var(--color-ghost)' : relColor(rel), marginRight: 6 }}>―</span>
+                  {rel}
+                </span>
+                <span className="t-ghost text-[9px]">· {count}</span>
+              </button>
+            )
+          })}
+          {relCounts.length === 0 && <div className="t-dim text-[11px] italic">No edges.</div>}
+          {hasRelFilter && (
+            <button
+              onClick={() => highlightedRels.forEach(onToggleRel)}
+              className="t-ghost text-[10px] hover:text-[color:var(--color-mid)] mt-1.5"
+            >
+              clear filter
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="border-t border-[var(--color-line)] px-3.5 py-2.5">
@@ -700,6 +759,9 @@ export function GraphView() {
   const triggerSync = useStore((s) => s.triggerGraphSync)
 
   const [highlightedKinds, setHighlightedKinds] = useState<Set<string>>(new Set())
+  // #126: opt-in per-rel declutter filter. Default empty = ALL edge types shown
+  // (Corey's intent: the graph represents everything, including islands).
+  const [highlightedRels, setHighlightedRels] = useState<Set<string>>(new Set())
   const [layout, setLayout] = useState<Layout>('force')
 
   // Code-graph overlay — OFF by default. Symbol nodes/edges are fetched lazily
@@ -747,6 +809,14 @@ export function GraphView() {
       return next
     })
 
+  const toggleRel = (rel: string) =>
+    setHighlightedRels((prev) => {
+      const next = new Set(prev)
+      if (next.has(rel)) next.delete(rel)
+      else next.add(rel)
+      return next
+    })
+
   // Cluster counts: distinct kinds with counts (over the merged dataset so the
   // 'symbol' cluster shows up when the overlay is on).
   const clusterCounts = useMemo(() => {
@@ -756,6 +826,20 @@ export function GraphView() {
       .map(([kind, count]) => ({ kind, count }))
       .sort((a, b) => b.count - a.count)
   }, [mergedNodes])
+
+  // Relation counts over the merged dataset — drives the // RELATIONS filter. Edges
+  // without a rel (symbol-overlay edges) are not rel-filterable and are skipped here.
+  const relCounts = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const e of mergedEdges) {
+      const rel = (e as { rel?: string }).rel
+      if (!rel) continue
+      map.set(rel, (map.get(rel) ?? 0) + 1)
+    }
+    return Array.from(map.entries())
+      .map(([rel, count]) => ({ rel, count }))
+      .sort((a, b) => b.count - a.count)
+  }, [mergedEdges])
 
   if (loading) {
     return (
@@ -782,6 +866,9 @@ export function GraphView() {
         clusterCounts={clusterCounts}
         highlightedKinds={highlightedKinds}
         onToggleKind={toggleKind}
+        relCounts={relCounts}
+        highlightedRels={highlightedRels}
+        onToggleRel={toggleRel}
         layout={layout}
         onSetLayout={setLayout}
         totalNodes={mergedNodes.length}
@@ -797,6 +884,7 @@ export function GraphView() {
           edges={mergedEdges}
           activeId={selectedId}
           highlightedKinds={highlightedKinds}
+          highlightedRels={highlightedRels}
           layout={layout}
           onNodeClick={(id) => setSelected(id === selectedId ? null : id)}
         />

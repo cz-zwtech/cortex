@@ -1443,9 +1443,17 @@ export async function getAllForGraph() {
     return e
   })
 
-  // Edge shape: { from, to, label } per LINKS_TO edge.
-  const edges = all<{ from: string; to: string; label: string }>(
-    `SELECT src AS "from", dst AS "to", label FROM edges WHERE rel = 'LINKS_TO'`,
+  // Edge shape: { from, to, rel, label }. Export EVERY edge whose BOTH endpoints
+  // exist in the entries node-set — a self-excluding semijoin (#126). symbol<->symbol
+  // edges (CALLS/IMPORTS/...; their endpoints live in the `symbols` table, served by
+  // the separate showCode overlay) and any dangling edge drop out with no hardcoded
+  // rel allowlist and no dangling edges for the frontend to silently discard. `rel`
+  // lets the view colour/filter edges by type; `label` (LINKS_TO only) is preserved.
+  const edges = all<{ from: string; to: string; rel: string; label: string }>(
+    `SELECT e.src AS "from", e.dst AS "to", e.rel AS rel, e.label AS label
+       FROM edges e
+      WHERE e.src IN (SELECT id FROM entries)
+        AND e.dst IN (SELECT id FROM entries)`,
   )
 
   return { nodes, edges }
