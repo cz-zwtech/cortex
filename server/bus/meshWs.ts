@@ -34,6 +34,7 @@ import { getMachineId } from '../privateMind.js'
 import { schedulePersist } from './meshPeerStore.js'
 import { getMeshState, type KnownNode } from './meshState.js'
 import { classifyAndMaybeDial } from './meshDiscovery.js'
+import { attachHeartbeat, type HeartbeatHandle } from './meshHeartbeat.js'
 import { presenceStatus } from './identity.js'
 import {
   listPeers,
@@ -190,6 +191,10 @@ class Link {
   private authed = false
   private hs: MeshHandshake | null = null
   private hsTimer: ReturnType<typeof setTimeout> | null = null
+  /** #116 liveness heartbeat — started once the link is authed/LIVE, stopped on
+   *  teardown. Terminates the socket after a configurable miss-tolerance so a silent
+   *  drop fires the existing close→reconnect path instead of hanging OPEN. */
+  private hb: HeartbeatHandle | null = null
 
   constructor(ws: WebSocket, key: string, dialed: boolean) {
     this.ws = ws
@@ -261,6 +266,12 @@ class Link {
     void this.sendGossip()
     this.gossipTimer = setInterval(() => void this.sendGossip(), gossipMs())
     this.gossipTimer.unref()
+
+    // #116: start the liveness heartbeat now the link is LIVE. A live peer auto-pongs
+    // our pings, so a healthy link never terminates; a silent drop misses `tolerance`
+    // pongs in a row and gets terminated → the close handler re-dials (dialed) / the
+    // peer re-dials (accepted), and the mesh dot flips red within seconds.
+    this.hb = attachHeartbeat(this.ws)
   }
 
   /** hello carries OUR per-peer cursor map so the peer can backlog-replay only
@@ -524,6 +535,7 @@ class Link {
     this.unsubMsg?.()
     this.unsubMem?.()
     this.unsubState?.()
+    this.hb?.stop()
     if (this.gossipTimer) {
       clearInterval(this.gossipTimer)
       this.gossipTimer = null
