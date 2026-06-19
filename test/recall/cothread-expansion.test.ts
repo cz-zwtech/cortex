@@ -29,7 +29,7 @@ const sib = (viaEdge: string | null): ScoredCandidate => ({
     id: viaEdge ?? 'none', name: 'sib', kind: 'memory', description: '',
     content: 'x'.repeat(80), scope: 'project:B', updatedAt: 1_700_000_000_000, syncedAt: 1, pinned: false,
   },
-  state: { hops: 2, cosine: null, viaEdge }, usage: 0, decay: 0,
+  state: { hops: 2, cosine: null, viaEdge }, usage: 0, decay: 0, superseded: false,
 })
 const [g] = rankCandidates([sib('GROUPS')], { query: 'q' } as any)
 const [n] = rankCandidates([sib(null)], { query: 'q' } as any)

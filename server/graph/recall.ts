@@ -47,6 +47,12 @@ const DECAY_ON_RECALLFORFILE = process.env.CKN_DECAY_RECALLFORFILE === '1'
 // override a meaningfully better cosine match. Labeled tuning knob; revisit
 // only on a quality eyeball, do not raise into override territory.
 export const SCOPE_PRIOR_WEIGHT = Number(process.env.CKN_SCOPE_PRIOR_WEIGHT) || 0.05
+// #121: how hard a SUPERSEDED memory (the OLD endpoint of a CONTRADICTS/EVOLVED_INTO
+// relation) is docked in recall ranking. Supersession is a HARD signal — an explicit
+// "this replaced that" from frontmatter/heuristic — so the penalty is >= the decay
+// penalty: enough to sink the stale memory below its replacement, never enough to
+// remove it (MARK never delete). Tunable.
+const SUPERSEDE_RANK_PENALTY = Number(process.env.CKN_SUPERSEDE_PENALTY) || 0.4
 
 /** Build a `(?, ?, …)` placeholder list of length `n` for an `IN (…)` clause. */
 const placeholders = (n: number): string => Array.from({ length: n }, () => '?').join(', ')
@@ -99,6 +105,10 @@ export interface RecallSignals {
    *  score 0 (zero penalty). A de-prioritization, NEVER a filter — a high-decay
    *  memory still returns. */
   decay: number
+  /** #121 supersession: true when this memory is the SUPERSEDED (old) endpoint of a
+   *  CONTRADICTS (new→old) or EVOLVED_INTO (old→new) relation. The composite is
+   *  docked by SUPERSEDE_RANK_PENALTY — a de-prioritization, NEVER a filter. */
+  superseded: boolean
   /** Composite final score (the value used for ranking). */
   composite: number
 }
@@ -187,7 +197,7 @@ const edgeBonus = (ctx: RecallContext, viaEdge: string | null): number => {
   return 0.01
 }
 
-const composite = (sig: Omit<RecallSignals, 'composite' | 'decay'>, ctx: RecallContext): number => {
+const composite = (sig: Omit<RecallSignals, 'composite' | 'decay' | 'superseded'>, ctx: RecallContext): number => {
   const cosineScore = sig.cosine ?? 0
   // Direct-seed bonus — we trust vector seeds slightly more than 1-hop
   // expansions because the embedding match is direct evidence of relevance.
@@ -418,6 +428,9 @@ export interface ScoredCandidate {
   usage: number
   /** s4 decay score [0,1], precomputed by the caller so this stays DB-free. */
   decay: number
+  /** #121: true when this candidate is the superseded (old) endpoint of a
+   *  CONTRADICTS/EVOLVED_INTO edge — precomputed by the caller (keeps this DB-free). */
+  superseded: boolean
 }
 
 /**
@@ -438,19 +451,22 @@ export const rankCandidates = (candidates: ScoredCandidate[], ctx: RecallContext
     if (row.kind === 'file' || row.kind === 'tool' || row.kind === 'thread') continue
     if (row.kind === 'concept' && (row.content ?? '').trim().length < 50) continue
 
-    const sig: Omit<RecallSignals, 'composite' | 'decay'> = {
+    const sig: Omit<RecallSignals, 'composite' | 'decay' | 'superseded'> = {
       cosine: state.cosine,
       hops: state.hops,
       recency: recencyScore(row.updatedAt),
       viaEdge: state.viaEdge,
       usage: c.usage,
     }
-    // Pinned mental models get a flat +0.3 boost. Scope prior is a small
-    // additive nudge (never an exclusion). s4 decay de-prioritizes stale.
+    // Pinned mental models get a flat +0.3 boost. Scope prior is a small additive
+    // nudge (never an exclusion). s4 decay de-prioritizes stale. #121: a SUPERSEDED
+    // memory (old endpoint of CONTRADICTS/EVOLVED_INTO) is docked so the current
+    // memory outranks it — de-prioritize, never filter.
     const pinBoost = row.pinned ? 0.3 : 0
     const scopeBonus = SCOPE_PRIOR_WEIGHT * scopeProximity(row.scope, ctx.scopes)
+    const supersedePenalty = c.superseded ? SUPERSEDE_RANK_PENALTY : 0
     const compositeScore =
-      composite(sig, ctx) + pinBoost + scopeBonus - DECAY_RANK_PENALTY * c.decay
+      composite(sig, ctx) + pinBoost + scopeBonus - DECAY_RANK_PENALTY * c.decay - supersedePenalty
 
     hits.push({
       id: row.id,
@@ -461,11 +477,35 @@ export const rankCandidates = (candidates: ScoredCandidate[], ctx: RecallContext
       scope: row.scope,
       source: kindToSource(row.kind, row.scope),
       syncedAt: row.syncedAt,
-      signals: { ...sig, decay: c.decay, composite: compositeScore },
+      signals: { ...sig, decay: c.decay, superseded: c.superseded, composite: compositeScore },
     })
   }
   hits.sort((a, b) => b.signals.composite - a.signals.composite)
   return hits
+}
+
+/**
+ * #121: the SUPERSEDED (old) members of a candidate set — the `dst` of a
+ * CONTRADICTS edge (materialized new→old) or the `src` of an EVOLVED_INTO edge
+ * (materialized old→new). One bounded query per relation over the candidate ids
+ * (never a corpus scan), mirroring how decay stays candidate-bounded. Honors the
+ * supersede edges sync builds from `contradicts:` / `evolved_from:` frontmatter.
+ */
+export const supersededCandidateIds = (ids: string[]): Set<string> => {
+  const out = new Set<string>()
+  if (ids.length === 0) return out
+  const ph = placeholders(ids.length)
+  const contradicted = all<{ id: string }>(
+    `SELECT DISTINCT dst AS id FROM edges WHERE rel = 'CONTRADICTS' AND dst IN (${ph})`,
+    ...ids,
+  )
+  const evolved = all<{ id: string }>(
+    `SELECT DISTINCT src AS id FROM edges WHERE rel = 'EVOLVED_INTO' AND src IN (${ph})`,
+    ...ids,
+  )
+  for (const r of contradicted) out.add(r.id)
+  for (const r of evolved) out.add(r.id)
+  return out
 }
 
 // ── public API ──────────────────────────────────────────────────────────────
@@ -523,8 +563,12 @@ export const graphRecall = async (ctx: RecallContext): Promise<RecallHit[]> => {
   //     candidate set instead of one per candidate.
   const usage = await usageBonuses(candidateIds)
 
-  // 6. Assemble scored candidates (decay precomputed per candidate so the
-  //    ranking stays a pure, testable function) and rank. Scope enters ONLY as
+  // 5c. #121: which candidates are the SUPERSEDED endpoint of a CONTRADICTS/
+  //     EVOLVED_INTO relation — one bounded edge query over the candidate set.
+  const superseded = supersededCandidateIds(candidateIds)
+
+  // 6. Assemble scored candidates (decay + supersession precomputed per candidate so
+  //    the ranking stays a pure, testable function) and rank. Scope enters ONLY as
   //    the soft prior inside rankCandidates — NOT a filter (folder-transcending).
   //    s4 decay: ONE decayScore per already-fetched candidate (bounded to the
   //    candidate set, never a corpus scan).
@@ -533,7 +577,13 @@ export const graphRecall = async (ctx: RecallContext): Promise<RecallHit[]> => {
     const row = rows.get(id)
     if (!row) continue
     const state = pool.get(id)!
-    candidates.push({ row, state, usage: usage.get(id) ?? 0, decay: decayScore(id, Date.now()).score })
+    candidates.push({
+      row,
+      state,
+      usage: usage.get(id) ?? 0,
+      decay: decayScore(id, Date.now()).score,
+      superseded: superseded.has(id),
+    })
   }
   const hits = rankCandidates(candidates, ctx)
 
@@ -589,6 +639,9 @@ export const recallForFile = async (
   const ids = Array.from(memIds)
   const hydrated = await hydrate(ids)
   const usage = await usageBonuses(ids)
+  // #121: which of this file's memories are the superseded (old) endpoint — one
+  // bounded edge query (not per-candidate), so it's cheap even on the per-edit path.
+  const superseded = supersededCandidateIds(ids)
   const ctx: RecallContext = { query: '', files: [target] }
 
   const hits: RecallHit[] = []
@@ -600,7 +653,7 @@ export const recallForFile = async (
     if (row.kind === 'file' || row.kind === 'tool' || row.kind === 'session') continue
     if (row.kind === 'concept' && (row.content ?? '').trim().length < 50) continue
 
-    const sig: Omit<RecallSignals, 'composite' | 'decay'> = {
+    const sig: Omit<RecallSignals, 'composite' | 'decay' | 'superseded'> = {
       cosine: null,
       hops: 1,
       recency: recencyScore(row.updatedAt),
@@ -612,6 +665,7 @@ export const recallForFile = async (
     // when off we don't even call decayScore, so zero added per-edit cost. Same
     // de-prioritize-never-filter contract as graphRecall when enabled.
     const decayPenaltyScore = DECAY_ON_RECALLFORFILE ? decayScore(id, Date.now()).score : 0
+    const supersedePenalty = superseded.has(id) ? SUPERSEDE_RANK_PENALTY : 0
     hits.push({
       id: row.id,
       name: row.name,
@@ -621,7 +675,7 @@ export const recallForFile = async (
       scope: row.scope,
       source: kindToSource(row.kind, row.scope),
       syncedAt: row.syncedAt,
-      signals: { ...sig, decay: decayPenaltyScore, composite: composite(sig, ctx) + pinBoost - DECAY_RANK_PENALTY * decayPenaltyScore },
+      signals: { ...sig, decay: decayPenaltyScore, superseded: superseded.has(id), composite: composite(sig, ctx) + pinBoost - DECAY_RANK_PENALTY * decayPenaltyScore - supersedePenalty },
     })
   }
 
