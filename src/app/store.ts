@@ -13,6 +13,7 @@ import {
   type Location,
   type WriteContext,
 } from '@/adapters'
+import type { SavedLayout } from './shell/graphLayout'
 import {
   loadProjects,
   addManualProject,
@@ -199,6 +200,10 @@ interface State {
   graphAllNodes: GraphNode[]
   graphAllEdges: GraphEdge[]
   graphAllLoading: boolean
+  /** #128: baked graph layout (node positions) persisted to ui-state so the graph view
+   *  opens frozen instead of re-radiating. */
+  graphLayout: SavedLayout | null
+  setGraphLayout: (layout: SavedLayout) => void
   /** All scopes in the graph with entry counts — server-truth, independent of search/page limits. */
   graphScopes: { scope: string; count: number }[]
   /** All kinds in the graph with entry counts — server-truth. */
@@ -515,6 +520,7 @@ const scheduleUiSave = (state: State) => {
       scopeTags: state.scopeTags,
       hiddenTags: Array.from(state.hiddenTags),
       hiddenSessionIds: Array.from(state.hiddenSessionIds),
+      graphLayout: state.graphLayout ?? undefined,
     })
   }, 250)
 }
@@ -594,6 +600,7 @@ export const useStore = create<Store>((set, get) => ({
   graphAllNodes: [],
   graphAllEdges: [],
   graphAllLoading: false,
+  graphLayout: null,
   graphScopes: [],
   graphKinds: [],
   machines: [],
@@ -606,6 +613,11 @@ export const useStore = create<Store>((set, get) => ({
   sharedBusy: false,
   sharedLastMessage: null,
 
+  setGraphLayout: (layout: SavedLayout) => {
+    set({ graphLayout: layout })
+    scheduleUiSave(get())
+  },
+
   bootstrap: async () => {
     try {
       const home = await fs.homeDir()
@@ -617,7 +629,7 @@ export const useStore = create<Store>((set, get) => ({
       ])
       const ui = await loadUiState(home)
       const settings = await loadSettings(home)
-      set({ settings })
+      set({ settings, graphLayout: ui.graphLayout ?? null })
       const restoredScope =
         (ui.lastScopeKey && scopeFromKey(ui.lastScopeKey)) || USER_SCOPE
       const rawKind = (ui.lastKind as Kind) ?? 'claudemd'

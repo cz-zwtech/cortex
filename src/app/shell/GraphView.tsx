@@ -10,6 +10,7 @@ import { useStore } from '@/app/store'
 import { graphSymbolGraph, type GraphLink, type GraphNode, type GraphEdge } from '@/adapters/graph'
 import { nodeHighlight, textOpacity, edgeHighlight, setsEqual } from './graphHighlight'
 import { relColor, relVisible } from './graphEdgeStyle'
+import { layoutSignature, restoreLayout, layoutCovers, type SavedLayout } from './graphLayout'
 
 // Tone for cluster colors — phos / amber / rose / cyan / dim per spec.
 const KIND_TONE: Record<string, string> = {
@@ -62,6 +63,8 @@ function GraphCanvas({
   highlightedRels,
   layout,
   onNodeClick,
+  savedLayout,
+  onBakeLayout,
 }: {
   nodes: (SimNode & { syncedAt?: number; updatedAt?: number })[]
   edges: { from: string; to: string; rel?: string; label?: string }[]
@@ -70,10 +73,14 @@ function GraphCanvas({
   highlightedRels: Set<string>
   layout: Layout
   onNodeClick: (id: string) => void
+  savedLayout: SavedLayout | null
+  onBakeLayout: (layout: SavedLayout) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const [dims, setDims] = useState({ width: 0, height: 0 })
+  // #128: shown while a baked layout is (re)computed off the visible path.
+  const [layingOut, setLayingOut] = useState(false)
 
   // #122(b): hold onNodeClick in a ref so buildGraph does NOT depend on its identity
   // — a fresh inline arrow from the parent each render must not tear down + cold-
@@ -88,6 +95,13 @@ function GraphCanvas({
   const prevKindsRef = useRef<Set<string>>(new Set())
   const prevRelsRef = useRef<Set<string>>(new Set())
   const needsFullRestyleRef = useRef(true)
+  // #128: read saved layout + bake-setter via refs so buildGraph does NOT depend on them
+  // — persisting a fresh bake updates the store, which must not re-trigger buildGraph.
+  const savedLayoutRef = useRef(savedLayout)
+  savedLayoutRef.current = savedLayout
+  const onBakeLayoutRef = useRef(onBakeLayout)
+  onBakeLayoutRef.current = onBakeLayout
+  const settleRafRef = useRef<number | null>(null)
 
   // Measure
   useEffect(() => {
@@ -262,14 +276,21 @@ function GraphCanvas({
         .force('collision', d3.forceCollide(14))
     }
 
-    sim.on('tick', () => {
+    // #128: never animate the settle on open — Corey: "the movement render is slow and
+    // clunky, can we pre-render it". paint() applies the CURRENT node positions; it is
+    // wired to tick() ONLY so a user drag still repaints. The sim is stopped immediately
+    // so it never auto-radiates — positions come from a restored bake (frozen open) or a
+    // SILENT off-screen re-settle below.
+    const paint = () => {
       link
         .attr('x1', (d) => (d.source as SimNode).x ?? 0)
         .attr('y1', (d) => (d.source as SimNode).y ?? 0)
         .attr('x2', (d) => (d.target as SimNode).x ?? 0)
         .attr('y2', (d) => (d.target as SimNode).y ?? 0)
       node.attr('transform', (d) => `translate(${d.x ?? 0},${d.y ?? 0})`)
-    })
+    }
+    sim.on('tick', paint)
+    sim.stop()
 
     // Retain the selections for the highlight effect + force its next pass to be a
     // FULL restyle (the DOM was just rebuilt).
@@ -277,7 +298,59 @@ function GraphCanvas({
     linkSelRef.current = link
     needsFullRestyleRef.current = true
 
+    const ids = simNodes.map((n) => n.id)
+    const sig = layoutSignature(nodes, edges)
+    const saved = savedLayoutRef.current
+    if (saved && saved.sig === sig && layoutCovers(saved, ids)) {
+      // Open FROZEN at the baked layout — zero radiate.
+      const pos = restoreLayout(saved, ids)
+      for (const n of simNodes) {
+        const p = pos.get(n.id)
+        if (p) {
+          n.x = p.x
+          n.y = p.y
+          n.fx = p.x
+          n.fy = p.y
+        }
+      }
+      paint()
+    } else {
+      // Graph changed (or never baked): re-settle OFF the visible path — tick WITHOUT
+      // painting, in rAF batches so the tab stays responsive (a light "laying out"
+      // indicator shows), then pin where nodes land, paint once, and persist the bake.
+      setLayingOut(true)
+      const MAX_TICKS = 320
+      const TICKS_PER_FRAME = 8
+      let ticks = 0
+      const settle = () => {
+        for (let i = 0; i < TICKS_PER_FRAME && ticks < MAX_TICKS && sim.alpha() > sim.alphaMin(); i++) {
+          sim.tick()
+          ticks++
+        }
+        if (ticks >= MAX_TICKS || sim.alpha() <= sim.alphaMin()) {
+          for (const n of simNodes) {
+            n.fx = n.x
+            n.fy = n.y
+          }
+          paint()
+          setLayingOut(false)
+          settleRafRef.current = null
+          onBakeLayoutRef.current({
+            sig,
+            nodes: simNodes.map((n) => ({ id: n.id, x: n.x ?? 0, y: n.y ?? 0 })),
+          })
+          return
+        }
+        settleRafRef.current = requestAnimationFrame(settle)
+      }
+      settleRafRef.current = requestAnimationFrame(settle)
+    }
+
     return () => {
+      if (settleRafRef.current != null) {
+        cancelAnimationFrame(settleRafRef.current)
+        settleRafRef.current = null
+      }
       sim.stop()
     }
   }, [nodes, edges, dims, layout])
@@ -373,6 +446,11 @@ function GraphCanvas({
       <div className="absolute bottom-3 right-3 t-ghost text-[10px]">
         scroll to zoom · drag to pan · click node to inspect
       </div>
+      {layingOut && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <span className="t-dim text-[11px] tracking-[0.2em] caret">laying out…</span>
+        </div>
+      )}
     </div>
   )
 }
@@ -757,6 +835,8 @@ export function GraphView() {
   const selectedId = useStore((s) => s.selectedEntryId)
   const setSelected = useStore((s) => s.setSelectedEntryId)
   const triggerSync = useStore((s) => s.triggerGraphSync)
+  const savedLayout = useStore((s) => s.graphLayout)
+  const setGraphLayout = useStore((s) => s.setGraphLayout)
 
   const [highlightedKinds, setHighlightedKinds] = useState<Set<string>>(new Set())
   // #126: opt-in per-rel declutter filter. Default empty = ALL edge types shown
@@ -887,6 +967,8 @@ export function GraphView() {
           highlightedRels={highlightedRels}
           layout={layout}
           onNodeClick={(id) => setSelected(id === selectedId ? null : id)}
+          savedLayout={savedLayout}
+          onBakeLayout={setGraphLayout}
         />
         {selectedId && <NodeDrawer onJumpTo={(id) => setSelected(id)} />}
       </div>

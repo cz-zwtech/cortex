@@ -20,6 +20,16 @@ export interface UiState {
    * Files are never deleted — this is a UI filter only.
    */
   hiddenSessionIds?: string[]
+  /**
+   * #128: baked graph-view layout — node positions persisted per-machine so the force
+   * graph opens FROZEN instead of re-radiating. `sig` is an edge-aware signature; a
+   * mismatch triggers a silent re-settle. x3/y3/z3 are reserved for the future 3D
+   * renderer and not written by the 2D bake.
+   */
+  graphLayout?: {
+    sig: string
+    nodes: { id: string; x: number; y: number; x3?: number; y3?: number; z3?: number }[]
+  }
 }
 
 const uiStatePath = (home: string): string =>
@@ -35,6 +45,7 @@ export const loadUiState = async (home: string): Promise<UiState> => {
     hiddenTags: loaded?.hiddenTags ?? [],
     scopeTags: loaded?.scopeTags ?? {},
     hiddenSessionIds: loaded?.hiddenSessionIds ?? [],
+    graphLayout: loaded?.graphLayout,
   }
 }
 
