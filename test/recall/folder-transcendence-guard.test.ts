@@ -9,6 +9,7 @@ const mk = (id: string, scope: string): ScoredCandidate => ({
   state: { hops: 0, cosine: 0.5, viaEdge: null },
   usage: 0,
   decay: 0,
+  superseded: false,
 })
 
 // cwd is under project:A; B is a DIFFERENT project. Both equal cosine.
