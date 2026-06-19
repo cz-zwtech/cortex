@@ -13,8 +13,8 @@ import path from 'node:path'
 import YAML from 'yaml'
 import { all, get, run, transaction, DB_PATH } from './db.js'
 import { rowToEntry } from './_rows.js'
-import { embedText, embeddingTextForEntry, getEmbeddingMode } from '../embeddings.js'
-import { putEmbedding } from '../embeddingStore.js'
+import { embedText, embeddingTextForEntry, getEmbeddingMode, embedConcurrency } from '../embeddings.js'
+import { putEmbedding, embeddedIdSet, flushEmbeddings } from '../embeddingStore.js'
 import { listImports } from '../importedVaults.js'
 import { getMachineId } from '../privateMind.js'
 import { readSyncManifest, statUnchanged, writeSyncManifest } from './syncManifest.js'
@@ -381,6 +381,54 @@ export interface SyncResult {
   errors: string[]
   /** Thread files healed from the graph after an external frontmatter strip. */
   healed?: number
+  /** #123: entries whose embedding was DEFERRED (deferEmbeddings) — the boot caller
+   *  drains this via backfillEmbeddings OUTSIDE the graph write lock. Empty when
+   *  embedding inline (the default) or when embeddings are off. */
+  embedQueue: Array<{ id: string; text: string }>
+}
+
+/** #123 interrupted-backfill guard: an unchanged entry may be skipped ONLY if it is
+ *  already embedded (or embeddings are off — no vector to protect). If a deferred or
+ *  failed embed left an entry with a matching content_hash but NO vector, this returns
+ *  false so the sync re-processes + re-embeds it instead of skipping it forever. */
+export const mayEmbedSkip = (
+  id: string | undefined,
+  embeddedIds: Set<string>,
+  embedMode: string,
+): boolean => embedMode === 'off' || (id !== undefined && embeddedIds.has(id))
+
+/** #123(b)+(c): drain a deferred embed queue OUTSIDE the graph write lock. Batches by
+ *  the worker's in-flight cap so embedText never overflows its mailbox, and persists
+ *  the sidecar once at the end. Failures are left for the next sync to retry — the
+ *  vector-present fast-path guard (mayEmbedSkip) re-embeds anything still missing. */
+export async function backfillEmbeddings(
+  queue: Array<{ id: string; text: string }>,
+  opts: { concurrency?: number } = {},
+): Promise<{ embedded: number; failed: number }> {
+  if (queue.length === 0) return { embedded: 0, failed: 0 }
+  const n = Math.max(1, opts.concurrency ?? embedConcurrency())
+  let embedded = 0
+  let failed = 0
+  for (let i = 0; i < queue.length; i += n) {
+    const chunk = queue.slice(i, i + n)
+    await Promise.all(
+      chunk.map(async ({ id, text }) => {
+        try {
+          const vec = await embedText(text)
+          if (vec) {
+            await putEmbedding(id, vec)
+            embedded++
+          } else {
+            failed++ // mailbox full / model not ready — retried next sync via the guard
+          }
+        } catch {
+          failed++
+        }
+      }),
+    )
+  }
+  await flushEmbeddings()
+  return { embedded, failed }
 }
 
 interface PendingEdges {
@@ -435,9 +483,18 @@ export function coalesceSync<T>(run: () => Promise<T>): Promise<T> {
   return syncTrailing as Promise<T>
 }
 
-export async function syncMemories(home: string): Promise<SyncResult> {
-  const result: SyncResult = { synced: 0, skipped: 0, errors: [], healed: 0 }
+export async function syncMemories(
+  home: string,
+  opts: { deferEmbeddings?: boolean } = {},
+): Promise<SyncResult> {
+  const result: SyncResult = { synced: 0, skipped: 0, errors: [], healed: 0, embedQueue: [] }
   const pendingEdges: PendingEdges[] = []
+  // #123: snapshot embedding mode + the already-embedded id set ONCE. The fast-paths
+  // below skip an unchanged entry only if it already has a vector (mayEmbedSkip), so a
+  // deferred/failed embed can't strand it; deferEmbeddings collects the embed work
+  // into result.embedQueue for a background backfill outside the graph write lock.
+  const embedMode = getEmbeddingMode()
+  const alreadyEmbedded = embedMode === 'off' ? new Set<string>() : await embeddedIdSet()
 
   // Snapshot the existing content_hash per entry so we can skip files whose
   // content is byte-identical to what's already in the graph. The upsert path
@@ -457,6 +514,9 @@ export async function syncMemories(home: string): Promise<SyncResult> {
   // read to know), but source==file path is knowable up front, so the per-file
   // change test below can use either key.
   const existingHashBySource = new Map<string, string>()
+  // #123: source path -> entry id, so the file-keyed fast-paths can check whether the
+  // entry already has a vector (mayEmbedSkip) before skipping its read/re-embed.
+  const existingIdBySource = new Map<string, string>()
   // Existing thread entries keyed by their source path — the cheap pre-filter for
   // the thread-strip resilience check below (threads are rare, so the per-file
   // strip lookup only fires for the handful of files that already back a thread,
@@ -469,7 +529,10 @@ export async function syncMemories(home: string): Promise<SyncResult> {
     for (const row of rows) {
       const h = row.content_hash ?? ''
       existingHashById.set(row.id, h)
-      if (row.source) existingHashBySource.set(row.source, h)
+      if (row.source) {
+        existingHashBySource.set(row.source, h)
+        existingIdBySource.set(row.source, row.id)
+      }
       if (row.kind === 'thread' && row.source) threadSourcesById.set(row.source, row.id)
     }
   } catch {
@@ -549,7 +612,11 @@ export async function syncMemories(home: string): Promise<SyncResult> {
       // entry ⟹ read + re-ingest even if the manifest still carries the stat
       // (the manifest lives in the same DB, so a graph wipe drops it too — this
       // is belt-and-suspenders).
-      if (statUnchanged(file, mtime, size, manifest) && existingHashBySource.has(file)) {
+      if (
+        statUnchanged(file, mtime, size, manifest) &&
+        existingHashBySource.has(file) &&
+        mayEmbedSkip(existingIdBySource.get(file), alreadyEmbedded, embedMode)
+      ) {
         statSkipped.add(file)
         continue
       }
@@ -560,7 +627,14 @@ export async function syncMemories(home: string): Promise<SyncResult> {
       fileRaw.set(file, raw)
       fileHash.set(file, hash)
       const prev = existingHashBySource.get(file)
-      if (prev === undefined || prev !== hash) anyChanged = true
+      // #123: an entry that is unchanged but NOT yet embedded must count as a change
+      // so the process loop doesn't short-circuit before re-queuing its embed.
+      if (
+        prev === undefined || prev !== hash ||
+        !mayEmbedSkip(existingIdBySource.get(file), alreadyEmbedded, embedMode)
+      ) {
+        anyChanged = true
+      }
     } catch {
       anyChanged = true // can't stat/read — fall back to the full read path
     }
@@ -584,7 +658,10 @@ export async function syncMemories(home: string): Promise<SyncResult> {
       const hash = fileHash.get(file)
       if (!anyChanged) {
         const prev = existingHashBySource.get(file)
-        if (hash !== undefined && prev !== undefined && prev === hash) {
+        if (
+          hash !== undefined && prev !== undefined && prev === hash &&
+          mayEmbedSkip(existingIdBySource.get(file), alreadyEmbedded, embedMode)
+        ) {
           result.skipped++
           continue
         }
@@ -701,7 +778,10 @@ export async function syncMemories(home: string): Promise<SyncResult> {
       // re-upsert because its hash matches. The edge queue above still
       // re-checks cross-references.
       const prevHash = existingHashById.get(id)
-      if (prevHash !== undefined && prevHash === contentHash && prevHash !== '') {
+      if (
+        prevHash !== undefined && prevHash === contentHash && prevHash !== '' &&
+        mayEmbedSkip(id, alreadyEmbedded, embedMode)
+      ) {
         result.skipped++
         continue
       }
@@ -770,13 +850,20 @@ export async function syncMemories(home: string): Promise<SyncResult> {
       // when the local model failed to load. Embedding errors never
       // break the sync — the entry is already in the graph; semantic
       // search just doesn't find it until a future sync re-attempts.
-      if (getEmbeddingMode() !== 'off') {
-        try {
-          const text = embeddingTextForEntry({ name, description, content })
-          const vec = await embedText(text)
-          if (vec) await putEmbedding(id, vec)
-        } catch {
-          // best-effort
+      if (embedMode !== 'off') {
+        const text = embeddingTextForEntry({ name, description, content })
+        if (opts.deferEmbeddings) {
+          // #123(c): defer to a background backfill OUTSIDE the graph write lock so the
+          // boot re-index never freezes the graph. The vector-present fast-path guard
+          // re-embeds anything the backfill drops/never reaches, so deferral is safe.
+          result.embedQueue.push({ id, text })
+        } else {
+          try {
+            const vec = await embedText(text)
+            if (vec) await putEmbedding(id, vec)
+          } catch {
+            // best-effort — the vector-present guard re-embeds on the next sync
+          }
         }
       }
 
