@@ -197,3 +197,12 @@ export const embeddingCount = async (): Promise<number> => {
   const store = await loadStore()
   return store.size
 }
+
+/** The set of entry ids that currently have a stored vector. #123: the sync
+ *  fast-paths consult this so an entry is skipped as "unchanged" ONLY when it is
+ *  also already embedded — otherwise a deferred/failed embed would strand it
+ *  permanently unsearchable behind a content_hash match. */
+export const embeddedIdSet = async (): Promise<Set<string>> => {
+  const store = await loadStore()
+  return new Set(store.keys())
+}

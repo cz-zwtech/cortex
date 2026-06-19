@@ -62,6 +62,11 @@ export const getEmbeddingDim = (): number => EMBEDDING_DIM
 // on a null vector.
 const EMBED_MAX_QUEUE = Math.max(1, Number(process.env.CKN_EMBED_MAX_QUEUE ?? '6'))
 
+/** The worker's in-flight cap — also the safe batch size for a parallel embed
+ *  backfill (#123): a chunk this size keeps `embedText` from returning null on a
+ *  full mailbox, since each chunk fully drains before the next starts. */
+export const embedConcurrency = (): number => EMBED_MAX_QUEUE
+
 type Pending = { resolve: (v: Float32Array | null) => void }
 let _worker: Worker | null = null
 let _workerFailed = false
