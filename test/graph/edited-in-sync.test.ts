@@ -53,7 +53,7 @@ const editEdge = (fileId: string, sess: string) =>
 // derive, persist the manifest.
 const cycle = async () => {
   const manifest = readSyncManifest()
-  const updates: Array<{ path: string; mtime: number; size: number }> = []
+  const updates: Array<{ path: string; mtime: number; size: number; ctime: number }> = []
   const r = await syncEditedIn(dir, manifest, updates)
   writeSyncManifest(updates)
   return r
@@ -145,7 +145,7 @@ const ok = (l: string) => { passed++; console.log(`  ok ${l}`) }
   ].join('\n'))
   // Force prevSize a few bytes INTO the appended record (mid-line straddle).
   const st = fs.statSync(midFile)
-  writeSyncManifest([{ path: midFile, mtime: Math.floor(st.mtimeMs), size: sizeBefore + 5 }])
+  writeSyncManifest([{ path: midFile, mtime: Math.floor(st.mtimeMs), size: sizeBefore + 5, ctime: Math.floor(st.ctimeMs) }])
   await cycle()
   assert.ok(editEdge(fileEntryId('/m/b.ts'), sidM), 'straddling record recovered via newline backup')
   ok('readTail: a record straddling the boundary is counted (backup to prev newline)')

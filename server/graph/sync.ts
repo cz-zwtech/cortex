@@ -656,7 +656,10 @@ export async function syncMemories(
   // (mtime,size) to persist for files we statted-as-changed/new. Stat-skipped
   // files already match the manifest, so they need no rewrite — keeping the
   // all-skip manifest write empty (the whole point of the fast path).
-  const manifestUpdates: Array<{ path: string; mtime: number; size: number }> = []
+  const manifestUpdates: Array<{ path: string; mtime: number; size: number; ctime: number }> = []
+  // #146: files re-read only because a legacy manifest row lacks ctime — a
+  // one-time upgrade cost, logged after the loop so the re-read is visible.
+  let ctimeBackfillReads = 0
   let anyChanged = false
   // Ids upserted this sync — the incremental scope for the name-mention pass (b').
   const changedIds: string[] = []
@@ -665,20 +668,30 @@ export async function syncMemories(
       const st = await fs.stat(file)
       const mtime = Math.floor(st.mtimeMs)
       const size = st.size
-      // Skip iff (mtime,size) unchanged AND an entry already exists for this
+      const ctime = Math.floor(st.ctimeMs)
+      // Skip iff (mtime,size,ctime) unchanged AND an entry already exists for this
       // source. Gating on an existing entry keeps a wiped graph correct: no
       // entry ⟹ read + re-ingest even if the manifest still carries the stat
       // (the manifest lives in the same DB, so a graph wipe drops it too — this
-      // is belt-and-suspenders).
+      // is belt-and-suspenders). #146: ctime closes the same-(mtime,size) hole.
       if (
-        statUnchanged(file, mtime, size, manifest) &&
+        statUnchanged(file, mtime, size, ctime, manifest) &&
         existingHashBySource.has(file) &&
         mayEmbedSkip(existingIdBySource.get(file), alreadyEmbedded, embedMode)
       ) {
         statSkipped.add(file)
         continue
       }
-      manifestUpdates.push({ path: file, mtime, size })
+      // #146: a file re-read ONLY because its legacy manifest row lacks ctime (old
+      // (mtime,size) still matches) is a one-time upgrade cost — count it to log.
+      const man = manifest.get(file)
+      if (
+        man !== undefined && man.ctime == null &&
+        man.mtime === mtime && man.size === size && existingHashBySource.has(file)
+      ) {
+        ctimeBackfillReads++
+      }
+      manifestUpdates.push({ path: file, mtime, size, ctime })
       fileMtimeMs.set(file, mtime)
       const raw = await fs.readFile(file, 'utf-8')
       const hash = createHash('sha256').update(raw).digest('hex')
@@ -696,6 +709,11 @@ export async function syncMemories(
     } catch {
       anyChanged = true // can't stat/read — fall back to the full read path
     }
+  }
+  if (ctimeBackfillReads > 0) {
+    console.log(
+      `[ckn sync] #146 ctime backfill: re-read ${ctimeBackfillReads} file(s) once to record ctime (one-time upgrade cost)`,
+    )
   }
 
   // Process each file

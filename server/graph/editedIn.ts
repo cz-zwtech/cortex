@@ -214,7 +214,7 @@ async function readTail(file: string, prevSize: number): Promise<string> {
 export async function syncEditedIn(
   home: string,
   manifest: Map<string, FileStat>,
-  manifestUpdates: Array<{ path: string; mtime: number; size: number }>,
+  manifestUpdates: Array<{ path: string; mtime: number; size: number; ctime: number }>,
 ): Promise<{ transcripts: number; sessions: number }> {
   let transcripts = 0
   let sessions = 0
@@ -241,9 +241,10 @@ export async function syncEditedIn(
         const st = await fs.stat(file)
         const mtime = Math.floor(st.mtimeMs)
         const size = st.size
+        const ctime = Math.floor(st.ctimeMs)
         const sessionExists = !!get<{ id: string }>('SELECT id FROM entries WHERE id = ? LIMIT 1', sid)
-        if (statUnchanged(file, mtime, size, manifest) && sessionExists) continue
-        manifestUpdates.push({ path: file, mtime, size })
+        if (statUnchanged(file, mtime, size, ctime, manifest) && sessionExists) continue
+        manifestUpdates.push({ path: file, mtime, size, ctime })
         const prev = manifest.get(file)
         let edited: EditedFile[]
         let mode: 'set' | 'add'
