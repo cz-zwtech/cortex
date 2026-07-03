@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "concurrently -n server,vite -c cyan,magenta \"npm run server\" \"npm run dev\"",
-    "dev": "vite",
+    "dev": "tsx bin/ckn-vite-guard.ts",
     "server": "tsx server/index.ts",
     "server:watch": "tsx watch server/index.ts",
     "sync": "tsx bin/ckn-sync.ts",
