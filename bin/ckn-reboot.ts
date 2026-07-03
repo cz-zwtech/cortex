@@ -14,7 +14,10 @@
  * `tsx watch` does not reload on /mnt (WSL inotify) and respawns its child on
  * crash, which previously piled up 9 instances contending for the graph writer.
  *
- * Usage: ckn-reboot [--reason "text"] [--grace <ms>] [--yes]
+ * By default the restart PRESERVES the running node's mode (private-mind +
+ * embeddings); pass --lean to force a lean boot (both off) instead (#139 A).
+ *
+ * Usage: ckn-reboot [--reason "text"] [--grace <ms>] [--lean] [--yes]
  */
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -22,6 +25,7 @@ import * as os from 'node:os'
 import * as fsSync from 'node:fs'
 import * as path from 'node:path'
 import { SERVER_URL, isServerUp } from './_graph-guard.js'
+import { parseEnviron, resolveRebootEnv, type LiveMode } from './rebootEnv.core.js'
 
 const execFileP = promisify(execFile)
 const arg = (f: string): string | undefined => {
@@ -30,6 +34,12 @@ const arg = (f: string): string | undefined => {
 }
 const GRACE_MS = Number(arg('--grace') ?? process.env.CKN_REBOOT_GRACE_MS ?? '20000')
 const REASON = arg('--reason') ?? 'maintenance'
+// #139 A: leaning (force private-mind + embeddings off) is now OPT-IN. By default
+// a reboot preserves the running node's mode instead of silently downgrading it.
+const LEAN =
+  process.argv.includes('--lean') ||
+  process.env.CKN_REBOOT_LEAN === '1' ||
+  process.env.CKN_REBOOT_LEAN === 'true'
 const LOG = path.join(os.homedir(), '.local', 'state', 'ckn', 'server.log')
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -96,15 +106,38 @@ const pidAlive = (pid: number): boolean => {
   }
 }
 
-const killListener = async (): Promise<void> => {
-  // Kill ONLY the process LISTENING on 3001 (not transient client connections).
-  let pids: number[] = []
+// The PID(s) LISTENING on 3001 (not transient client connections).
+const listenerPids = async (): Promise<number[]> => {
   try {
     const { stdout } = await execFileP('lsof', ['-ti:3001', '-sTCP:LISTEN'])
-    pids = stdout.split('\n').map((s) => Number(s.trim())).filter((n) => n > 0)
+    return stdout.split('\n').map((s) => Number(s.trim())).filter((n) => n > 0)
   } catch {
-    /* nothing listening */
+    return [] // nothing listening
   }
+}
+
+// #139 A: read the running server's booted CKN_PRIVATE_MIND / CKN_EMBEDDINGS from
+// /proc/<pid>/environ so a reboot preserves the mode the node is actually running
+// (Linux/WSL). Returns {} if unreadable; the caller then falls back to the
+// server's own defaults with a loud warn rather than a silent force-off.
+const readRunningMode = (pids: number[]): LiveMode => {
+  for (const pid of pids) {
+    try {
+      const env = parseEnviron(fsSync.readFileSync(`/proc/${pid}/environ`, 'utf8'))
+      const out: LiveMode = {}
+      if (env.CKN_PRIVATE_MIND !== undefined) out.privateMind = env.CKN_PRIVATE_MIND
+      if (env.CKN_EMBEDDINGS !== undefined) out.embeddings = env.CKN_EMBEDDINGS
+      return out
+    } catch {
+      /* try the next pid */
+    }
+  }
+  return {}
+}
+
+const killListener = async (): Promise<void> => {
+  // Kill ONLY the process LISTENING on 3001 (not transient client connections).
+  const pids = await listenerPids()
   for (const pid of pids) {
     try {
       process.kill(pid, 'SIGTERM')
@@ -158,26 +191,38 @@ const onPath = (cmd: string): boolean => {
   return false
 }
 
-const startServer = (): void => {
+const startServer = (live: LiveMode): void => {
   fsSync.mkdirSync(path.dirname(LOG), { recursive: true })
   const out = fsSync.openSync(LOG, 'a')
   const [cmd, args] = onPath('bao-run')
     ? ['bao-run', ['CKN_MESH_TOKEN', '--', 'npm', 'run', 'server']]
     : ['npm', ['run', 'server']]
-  // Lean boot by DEFAULT on the shared dev box: the private-mind re-index walks
-  // /mnt (WSL inotify/NTFS) and can block the event loop for minutes on boot,
-  // wedging the new instance in D-state and piling up restarts (observed
-  // 2026-05-31). So unless the caller has explicitly set these, force them off.
-  // A box that WANTS full mode sets CKN_PRIVATE_MIND/CKN_EMBEDDINGS in its env
-  // before invoking ckn-reboot, which we respect.
-  const leanEnv: Record<string, string> = { ...process.env } as Record<string, string>
-  if (leanEnv.CKN_PRIVATE_MIND === undefined) leanEnv.CKN_PRIVATE_MIND = 'off'
-  if (leanEnv.CKN_EMBEDDINGS === undefined) leanEnv.CKN_EMBEDDINGS = 'off'
+  // #139 A: PRESERVE the running node's mode across reboot instead of a blanket
+  // force-off. resolveRebootEnv honors an explicit CKN_PRIVATE_MIND/CKN_EMBEDDINGS
+  // in the reboot shell, else --lean (opt-in force-off — the old behavior, for a
+  // box that truly needs the lean boot to dodge the /mnt private-mind re-index
+  // wedge), else carries the live mode forward, else leaves the var unset (server
+  // default) with a loud warn — never a silent downgrade.
+  const resolved = resolveRebootEnv({
+    explicit: { privateMind: process.env.CKN_PRIVATE_MIND, embeddings: process.env.CKN_EMBEDDINGS },
+    lean: LEAN,
+    live,
+  })
+  for (const w of resolved.warnings) console.warn(`[ckn-reboot] ${w}`)
+  const childEnv: Record<string, string> = { ...process.env } as Record<string, string>
+  if (resolved.privateMind !== undefined) childEnv.CKN_PRIVATE_MIND = resolved.privateMind
+  else delete childEnv.CKN_PRIVATE_MIND
+  if (resolved.embeddings !== undefined) childEnv.CKN_EMBEDDINGS = resolved.embeddings
+  else delete childEnv.CKN_EMBEDDINGS
+  console.log(
+    `[ckn-reboot] booting with private-mind=${resolved.privateMind ?? '(default)'} ` +
+      `embeddings=${resolved.embeddings ?? '(default)'}${LEAN ? ' (--lean)' : ''}`,
+  )
   const child = spawn(cmd as string, args as string[], {
     cwd: path.resolve(path.dirname(new URL(import.meta.url).pathname), '..'),
     detached: true,
     stdio: ['ignore', out, out],
-    env: leanEnv,
+    env: childEnv,
   })
   child.unref()
 }
@@ -193,6 +238,22 @@ const waitReady = async (): Promise<boolean> => {
 const main = async () => {
   const sid = mySession()
   const up = await isServerUp()
+  // #139 A: capture the running node's mode BEFORE the kill so the restart
+  // preserves it. /proc gives the booted env; private-mind can be enabled via the
+  // clone (not only the env var), so fall back to /api/mind/status for its
+  // authoritative enabled state.
+  const live = readRunningMode(await listenerPids())
+  if (up && live.privateMind === undefined) {
+    try {
+      const r = await fetch(`${SERVER_URL}/api/mind/status`)
+      if (r.ok) {
+        const st = (await r.json()) as { enabled?: boolean }
+        if (typeof st.enabled === 'boolean') live.privateMind = st.enabled ? 'on' : 'off'
+      }
+    } catch {
+      /* leave undefined -> startServer warns + boots with the default */
+    }
+  }
   if (up) {
     const a = await announce(sid)
     if (a) await waitForAcks(sid, a.id, a.livePeers)
@@ -203,7 +264,7 @@ const main = async () => {
   console.log('[ckn-reboot] stopping listener on :3001…')
   await killListener()
   console.log('[ckn-reboot] starting one non-watch instance…')
-  startServer()
+  startServer(live)
   const ready = await waitReady()
   if (!ready) {
     console.error('[ckn-reboot] server did NOT come back up within timeout — check ' + LOG)
