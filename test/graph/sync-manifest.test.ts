@@ -35,29 +35,30 @@ const ok = (l: string) => { passed++; console.log(`  ok ${l}`) }
 {
   assert.equal(readSyncManifest().size, 0, 'fresh manifest is empty')
   writeSyncManifest([
-    { path: 'a.md', mtime: 100, size: 10 },
-    { path: 'b.md', mtime: 200, size: 20 },
+    { path: 'a.md', mtime: 100, size: 10, ctime: 30 },
+    { path: 'b.md', mtime: 200, size: 20, ctime: 40 },
   ])
   const m = readSyncManifest()
   assert.equal(m.size, 2, 'two entries persisted')
-  assert.deepEqual(m.get('a.md'), { mtime: 100, size: 10 }, 'round-trips mtime+size')
+  assert.deepEqual(m.get('a.md'), { mtime: 100, size: 10, ctime: 30 }, 'round-trips mtime+size+ctime')
   ok('manifest write/read round-trip')
 }
 
 // ── 2. statUnchanged — the read-skip decision
 {
   const m = readSyncManifest()
-  assert.equal(statUnchanged('a.md', 100, 10, m), true, 'same mtime+size → unchanged (skip read)')
-  assert.equal(statUnchanged('a.md', 101, 10, m), false, 'different mtime → changed')
-  assert.equal(statUnchanged('a.md', 100, 11, m), false, 'different size → changed')
-  assert.equal(statUnchanged('new.md', 100, 10, m), false, 'absent path → changed (new file)')
-  ok('statUnchanged is exact on (mtime,size); absent → changed')
+  assert.equal(statUnchanged('a.md', 100, 10, 30, m), true, 'same mtime+size+ctime → unchanged (skip read)')
+  assert.equal(statUnchanged('a.md', 101, 10, 30, m), false, 'different mtime → changed')
+  assert.equal(statUnchanged('a.md', 100, 11, 30, m), false, 'different size → changed')
+  assert.equal(statUnchanged('a.md', 100, 10, 31, m), false, 'different ctime → changed (#146)')
+  assert.equal(statUnchanged('new.md', 100, 10, 30, m), false, 'absent path → changed (new file)')
+  ok('statUnchanged is exact on (mtime,size,ctime); absent → changed')
 }
 
 // ── 3. upsert: re-writing a path replaces its stat
 {
-  writeSyncManifest([{ path: 'a.md', mtime: 999, size: 99 }])
-  assert.deepEqual(readSyncManifest().get('a.md'), { mtime: 999, size: 99 }, 'upsert replaces')
+  writeSyncManifest([{ path: 'a.md', mtime: 999, size: 99, ctime: 88 }])
+  assert.deepEqual(readSyncManifest().get('a.md'), { mtime: 999, size: 99, ctime: 88 }, 'upsert replaces')
   assert.equal(readSyncManifest().size, 2, 'upsert does not add a duplicate')
   ok('writeSyncManifest upserts by path')
 }

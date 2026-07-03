@@ -47,6 +47,7 @@ export function initSchema(db: Database.Database): void {
   ensureProfileSourceColumn(db)
   ensureProvenanceColumn(db)
   ensureClaimModeColumn(db)
+  ensureSyncManifestCtimeColumn(db)
   const ddl = fs.readFileSync(SCHEMA_PATH, 'utf8')
   db.exec(ddl)
 }
@@ -95,6 +96,22 @@ function ensureClaimModeColumn(db: Database.Database): void {
     (db.prepare('PRAGMA table_info(thread_claims)').all() as Array<{ name: string }>).map((c) => c.name),
   )
   if (!cols.has('mode')) db.exec(`ALTER TABLE thread_claims ADD COLUMN mode TEXT NOT NULL DEFAULT 'working'`)
+}
+
+/**
+ * Additive nullable `ctime` column on a PRE-existing `sync_manifest` table (#146):
+ * the stat read-gate now includes ctime so a same-size + preserved-mtime content
+ * edit is no longer false-skipped. NULL on legacy rows forces a one-time re-read
+ * (statUnchanged treats null as "must read"). No-op on a fresh DB (the DDL makes
+ * the final shape). Mirrors ensureProvenanceColumn.
+ */
+function ensureSyncManifestCtimeColumn(db: Database.Database): void {
+  const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_manifest'").get()
+  if (!exists) return
+  const cols = new Set(
+    (db.prepare('PRAGMA table_info(sync_manifest)').all() as Array<{ name: string }>).map((c) => c.name),
+  )
+  if (!cols.has('ctime')) db.exec(`ALTER TABLE sync_manifest ADD COLUMN ctime INTEGER`)
 }
 
 function ensureMandateColumns(db: Database.Database): void {
