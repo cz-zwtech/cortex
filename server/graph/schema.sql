@@ -124,7 +124,8 @@ CREATE INDEX IF NOT EXISTS idx_thread_claims_thread ON thread_claims(thread_id);
 CREATE TABLE IF NOT EXISTS sync_manifest (
   path  TEXT PRIMARY KEY,
   mtime INTEGER NOT NULL DEFAULT 0,
-  size  INTEGER NOT NULL DEFAULT 0
+  size  INTEGER NOT NULL DEFAULT 0,
+  ctime INTEGER  -- #146: nullable; NULL on a legacy row forces a one-time re-read
 );
 
 -- ── observation_meta: Observation specialization (id == entries.id) ──

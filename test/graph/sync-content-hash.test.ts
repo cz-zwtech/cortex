@@ -25,6 +25,11 @@ import { fileURLToPath } from 'node:url'
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ckn-sync-hash-home-'))
 const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ckn-sync-hash-db-'))
+// #108: isolate the config dir too. Without it the spawned server read+wrote the
+// REAL ~/.config/ckn (migrations.json + mesh state), so this test's outcome
+// depended on the state other tests left behind — an order-dependence in the
+// full graph-test sequence.
+const cfgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ckn-sync-hash-cfg-'))
 const PORT = 3093
 const SERVER_URL = `http://127.0.0.1:${PORT}`
 const memDir = path.join(home, '.claude', 'memory')
@@ -37,6 +42,7 @@ const cleanup = () => {
   try { if (server?.pid) process.kill(-server.pid, 'SIGKILL') } catch {}
   fs.rmSync(home, { recursive: true, force: true })
   fs.rmSync(dbDir, { recursive: true, force: true })
+  fs.rmSync(cfgDir, { recursive: true, force: true })
 }
 
 // Env shared by the server and every ckn-sync invocation: temp home for the
@@ -45,6 +51,11 @@ const env = {
   ...process.env,
   CKN_HOME: home,
   CKN_GRAPH_DB_PATH: path.join(dbDir, 'graph.sqlite'),
+  CKN_CONFIG_DIR: cfgDir,
+  // Sentinel: the spawned server boot must NOT register real hooks (shouldRegisterHooks
+  // returns false) and must never fall back to the default DB — keeps the test hermetic
+  // and off the real ~/.claude + ~/.config/ckn, which is what made it order-dependent.
+  CKN_FORBID_DEFAULT_DB: '1',
   CKN_PRIVATE_MIND: 'off',
   CKN_EMBEDDINGS: 'off',
   CKN_MESH_PEERS: '',
