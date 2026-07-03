@@ -14,7 +14,10 @@ import YAML from 'yaml'
 import { all, get, run, transaction, DB_PATH } from './db.js'
 import { rowToEntry } from './_rows.js'
 import { embedText, embeddingTextForEntry, getEmbeddingMode, embedConcurrency } from '../embeddings.js'
-import { putEmbedding, embeddedIdSet, flushEmbeddings } from '../embeddingStore.js'
+import { putEmbedding, embeddedIdSet, flushEmbeddings, allEmbeddings } from '../embeddingStore.js'
+import {
+  topKSimilar, capInDegree, simK, simThreshold, simMaxIndegree, simMaxN, similarityEnabled,
+} from './similarity.js'
 import { listImports } from '../importedVaults.js'
 import { getMachineId } from '../privateMind.js'
 import { readSyncManifest, statUnchanged, writeSyncManifest } from './syncManifest.js'
@@ -302,15 +305,21 @@ export interface EntryInput {
  */
 export const OBSERVATIONAL_RELS = ['SURFACED_IN', 'EDITED_IN'] as const
 
+/** #127: SIMILAR_TO is derived by the sync-time similarity pass (Pass D), not declared
+ *  by an entry's file. Like the observational rels it must survive a source re-upsert —
+ *  the pass owns its delete+recompute lifecycle — so the upsert delete carves it out too.
+ *  (Condition A: a re-sync of an entry must NOT silently drop its similarity edges.) */
+export const PRESERVED_ON_UPSERT_RELS = [...OBSERVATIONAL_RELS, 'SIMILAR_TO'] as const
+
 export function upsertEntry(_conn: unknown, entry: EntryInput): void {
   const syncedAt = Date.now()
   transaction(() => {
     // Wipe only the entry's DECLARED outbound edges; observational rels are owned by
     // the system (not the file), so they survive the re-upsert (decision A).
     run(
-      `DELETE FROM edges WHERE src = ? AND rel NOT IN (${OBSERVATIONAL_RELS.map(() => '?').join(',')})`,
+      `DELETE FROM edges WHERE src = ? AND rel NOT IN (${PRESERVED_ON_UPSERT_RELS.map(() => '?').join(',')})`,
       entry.id,
-      ...OBSERVATIONAL_RELS,
+      ...PRESERVED_ON_UPSERT_RELS,
     )
     run('DELETE FROM entries WHERE id = ?', entry.id)
     run(
@@ -429,6 +438,55 @@ export async function backfillEmbeddings(
   }
   await flushEmbeddings()
   return { embedded, failed }
+}
+
+/** #127 Pass D: materialize kNN SIMILAR_TO edges from the embedding sidecar.
+ *  `sourceIds === null` rebuilds for ALL embedded entries (the manual rebuild verb /
+ *  first run); an array recomputes only those sources (the incremental sync path). Each
+ *  source's existing SIMILAR_TO edges are deleted then re-derived from its top-K
+ *  neighbours (cosine stored in `weight`), with an in-degree cap to bound hub
+ *  over-linking. Above CKN_SIMILARITY_MAX_N embedded entries the O(n^2) pass is skipped
+ *  (ANN deferred) — logged, never silent. Callers gate on similarityEnabled(). */
+export async function materializeSimilarityEdges(
+  sourceIds: string[] | null,
+): Promise<{ sources: number; edges: number; skipped?: string }> {
+  const store = await allEmbeddings()
+  if (store.size === 0) return { sources: 0, edges: 0 }
+  if (store.size > simMaxN()) {
+    const skipped = `similarity skipped: ${store.size} embedded > CKN_SIMILARITY_MAX_N ${simMaxN()} (brute force disabled; ANN deferred)`
+    console.warn(`[ckn] ${skipped}`)
+    return { sources: 0, edges: 0, skipped }
+  }
+  const k = simK()
+  const threshold = simThreshold()
+  const sources = sourceIds === null ? Array.from(store.keys()) : sourceIds.filter((id) => store.has(id))
+  if (sources.length === 0) return { sources: 0, edges: 0 }
+
+  let candidates: Array<{ src: string; dst: string; weight: number }> = []
+  for (const id of sources) {
+    const vec = store.get(id)!
+    for (const hit of topKSimilar(id, vec, store, k, threshold)) {
+      candidates.push({ src: id, dst: hit.id, weight: hit.score })
+    }
+  }
+  // Hub guard. On a full rebuild this caps global in-degree; on an incremental pass it
+  // caps only within the recomputed batch (a full rebuild heals any residual — the
+  // bounded staleness noted with the manual rebuild verb).
+  candidates = capInDegree(candidates, simMaxIndegree())
+
+  const notedAt = Date.now()
+  let edges = 0
+  transaction(() => {
+    for (const id of sources) run(`DELETE FROM edges WHERE src = ? AND rel = 'SIMILAR_TO'`, id)
+    for (const e of candidates) {
+      run(
+        `INSERT OR IGNORE INTO edges (src, dst, rel, weight, notedAt) VALUES (?, ?, 'SIMILAR_TO', ?, ?)`,
+        e.src, e.dst, e.weight, notedAt,
+      )
+      edges++
+    }
+  })
+  return { sources: sources.length, edges }
 }
 
 interface PendingEdges {
@@ -976,6 +1034,18 @@ export async function syncMemories(
     await syncEditedIn(home, manifest, manifestUpdates)
   } catch (e: any) {
     result.errors.push(`edited-in pass: ${e.message}`)
+  }
+
+  // #127 Pass D: materialize kNN SIMILAR_TO edges for the entries (re)embedded this
+  // sync (incremental, O(changed*n)). Skipped when deferring embeddings (boot re-index:
+  // vectors aren't ready yet, so the manual rebuild verb / a later sync heals it) or when
+  // similarity is off. Best-effort — never breaks the memory sync.
+  if (!opts.deferEmbeddings && similarityEnabled(embedMode) && changedIds.length > 0) {
+    try {
+      await materializeSimilarityEdges(changedIds)
+    } catch (e: any) {
+      result.errors.push(`similarity pass: ${e.message}`)
+    }
   }
 
   // Persist the (mtime,size) of every file we statted-as-changed/new so the

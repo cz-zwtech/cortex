@@ -96,6 +96,8 @@ export interface RecallSignals {
   /** Edge label that brought this entry in via traversal, if any
    *  ("RESOLVES", "MENTIONS_FILE", etc) — null for direct cosine seeds. */
   viaEdge: string | null
+  /** #127: for a SIMILAR_TO neighbour, the stored cosine — scales edgeBonus. */
+  viaWeight?: number
   /** Phase 5 use signal — log-normalized surface count in [0, 1].
    *  Saturates at 10 surfaces. New entries (shown=0) score 0 and
    *  are ranked by cosine alone; well-used memories get a bonus. */
@@ -129,6 +131,8 @@ interface CandidateState {
   hops: number
   cosine: number | null
   viaEdge: string | null
+  /** #127: the SIMILAR_TO edge's stored cosine, so the bonus scales with closeness. */
+  viaWeight?: number
 }
 
 /**
@@ -184,11 +188,15 @@ export const scopeProximity = (rowScope: string, inPlayScopes: string[] | undefi
  * we found this entry via :RESOLVES, that's a strong signal — bump it.
  * Same for :MENTIONS_FILE when files are in the query, etc.
  */
-const edgeBonus = (ctx: RecallContext, viaEdge: string | null): number => {
+const edgeBonus = (ctx: RecallContext, viaEdge: string | null, viaWeight?: number): number => {
   if (!viaEdge) return 0
   if (viaEdge === 'RESOLVES' && ctx.errorText) return 0.12
   if (viaEdge === 'MENTIONS_FILE' && ctx.files && ctx.files.length > 0) return 0.10
   if (viaEdge === 'MENTIONS_TOOL' && ctx.tool) return 0.08
+  // #127: similarity edge — scale by the stored cosine so a 0.9 neighbour outweighs a
+  // 0.56 one. Bounded (<= 0.08) so a semantic neighbour nudges ranking without
+  // overpowering a direct query/seed hit; decay + supersession still compose on top.
+  if (viaEdge === 'SIMILAR_TO') return 0.08 * (viaWeight ?? 0)
   if (viaEdge === 'CONTRADICTS') return 0.05
   if (viaEdge === 'OCCURRED_IN') return 0.03
   // Co-thread sibling (now-slice 2-hop): must beat the flat 0.05 hop penalty so
@@ -215,7 +223,7 @@ const composite = (sig: Omit<RecallSignals, 'composite' | 'decay' | 'superseded'
     cosineW * cosineScore +
     0.20 * sig.usage +
     recencyW * sig.recency +
-    edgeBonus(ctx, sig.viaEdge) -
+    edgeBonus(ctx, sig.viaEdge, sig.viaWeight) -
     hopPenalty
   )
 }
@@ -268,14 +276,15 @@ const addCandidate = (
  * here (its outbound half rides the first branch); EVOLVED_INTO is bumped
  * in both directions, matching the old `direction: 'both'` semantics.
  */
-const expandFromSeeds = async (
+export const expandFromSeeds = async (
   seedIds: string[],
   pool: Map<string, CandidateState>,
 ): Promise<void> => {
   if (seedIds.length === 0) return
 
-  // Outbound: a seed is the source, the neighbor is the destination.
-  const outRels = ['RESOLVES', 'MENTIONS_FILE', 'MENTIONS_TOOL', 'OCCURRED_IN', 'CONTRADICTS', 'EVOLVED_INTO']
+  // Outbound: a seed is the source, the neighbor is the destination. #127: SIMILAR_TO
+  // (kNN semantic neighbours) rides this list so recall traverses the enriched edges.
+  const outRels = ['RESOLVES', 'MENTIONS_FILE', 'MENTIONS_TOOL', 'OCCURRED_IN', 'CONTRADICTS', 'EVOLVED_INTO', 'SIMILAR_TO']
   // Inbound (the "both"-direction rels): a seed is the destination, the
   // neighbor is the source — picks up the reverse leg of the symmetric edges.
   const inRels = ['CONTRADICTS', 'EVOLVED_INTO']
@@ -284,11 +293,13 @@ const expandFromSeeds = async (
   const outPh = placeholders(outRels.length)
   const inPh = placeholders(inRels.length)
 
-  const rows = all<{ id: string; viaEdge: string }>(
-    `SELECT dst AS id, rel AS viaEdge FROM edges ` +
+  // `weight` carries the SIMILAR_TO cosine (1.0 default for the other rels, unused by
+  // their flat edgeBonus) so the composite can scale the similarity bonus by closeness.
+  const rows = all<{ id: string; viaEdge: string; viaWeight: number }>(
+    `SELECT dst AS id, rel AS viaEdge, weight AS viaWeight FROM edges ` +
       `WHERE src IN (${seedPh}) AND rel IN (${outPh}) ` +
       `UNION ALL ` +
-      `SELECT src AS id, rel AS viaEdge FROM edges ` +
+      `SELECT src AS id, rel AS viaEdge, weight AS viaWeight FROM edges ` +
       `WHERE dst IN (${seedPh}) AND rel IN (${inPh})`,
     ...seedIds,
     ...outRels,
@@ -296,7 +307,7 @@ const expandFromSeeds = async (
     ...inRels,
   )
   for (const row of rows) {
-    addCandidate(pool, row.id, { hops: 1, cosine: null, viaEdge: row.viaEdge })
+    addCandidate(pool, row.id, { hops: 1, cosine: null, viaEdge: row.viaEdge, viaWeight: row.viaWeight })
   }
 }
 
@@ -456,6 +467,7 @@ export const rankCandidates = (candidates: ScoredCandidate[], ctx: RecallContext
       hops: state.hops,
       recency: recencyScore(row.updatedAt),
       viaEdge: state.viaEdge,
+      viaWeight: state.viaWeight,
       usage: c.usage,
     }
     // Pinned mental models get a flat +0.3 boost. Scope prior is a small additive
