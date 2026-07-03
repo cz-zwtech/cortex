@@ -14,30 +14,15 @@
  * writer, so this no longer collides on a DB lock — it can run whether or
  * not the Cortex server is up (the old isServerUp() bail is gone).
  */
-export {}
-
-interface Args {
-  force: boolean
-  limit: number | null
-}
-
-const parseArgs = (): Args => {
-  const argv = process.argv.slice(2)
-  const out: Args = { force: false, limit: null }
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]
-    if (a === '--force') out.force = true
-    else if (a === '--limit') out.limit = Number(argv[++i] ?? '')
-    else if (a === '--help' || a === '-h') {
-      console.log('usage: ckn-embed-backfill [--force] [--limit N]')
-      process.exit(0)
-    }
-  }
-  return out
-}
+import { parseBackfillArgs, runBackfill } from './embedBackfill.core.js'
 
 const main = async () => {
-  const args = parseArgs()
+  const argv = process.argv.slice(2)
+  if (argv.includes('--help') || argv.includes('-h')) {
+    console.log('usage: ckn-embed-backfill [--force] [--limit N] [--offset N]')
+    return
+  }
+  const args = parseBackfillArgs(argv)
   const { getEmbeddingMode, embedText, embeddingTextForEntry } = await import('../server/embeddings.js')
   if (getEmbeddingMode() === 'off') {
     console.log('[ckn embed-backfill] CKN_EMBEDDINGS=off — nothing to do')
@@ -47,46 +32,39 @@ const main = async () => {
   // writer lock to collide on), so there's no isServerUp() bail anymore —
   // run it server-up or server-down.
   const { all } = await import('../server/graph/db.js')
-  const { putEmbedding } = await import('../server/embeddingStore.js')
-  const { embeddingCount } = await import('../server/embeddingStore.js')
+  const { putEmbedding, embeddingCount, embeddedIdSet } = await import('../server/embeddingStore.js')
 
   const before = await embeddingCount()
   console.log(`[ckn embed-backfill] starting — ${before} embeddings in store`)
 
-  // Pull every Entry — limit + skip stub-only entries (kind=file/tool
-  // are traversal hubs, not memories worth embedding).
+  // Pull candidate Entries — skip stub-only entries (kind=file/tool are
+  // traversal hubs, not memories worth embedding). ORDER BY id gives --offset a
+  // stable page so a huge corpus can be backfilled in resumable chunks.
   const limit = args.limit && args.limit > 0 ? args.limit : 100_000
   type Row = { id: string; name: string; description: string; content: string }
   const rows = all<Row>(
     `SELECT id AS id, name AS name, description AS description, content AS content ` +
       `FROM entries WHERE kind <> 'file' AND kind <> 'tool' ` +
-      `LIMIT ?`,
+      `ORDER BY id LIMIT ? OFFSET ?`,
     limit,
+    args.offset,
   )
 
-  let embedded = 0
-  let skipped = 0
-  let failed = 0
+  // The documented skip: without --force, entries that already have a vector
+  // are skipped (idempotent); --force re-embeds them.
+  const existing = await embeddedIdSet()
   const t0 = Date.now()
-  for (const row of rows) {
-    try {
-      const text = embeddingTextForEntry(row)
-      const vec = await embedText(text)
-      if (!vec) {
-        failed++
-        continue
-      }
-      await putEmbedding(row.id, vec)
-      embedded++
-      if (embedded % 25 === 0) {
+  const { embedded, skipped, failed } = await runBackfill(rows, existing, args.force, {
+    embed: embedText,
+    put: putEmbedding,
+    textFor: embeddingTextForEntry,
+    onProgress: (n, total) => {
+      if (n % 25 === 0) {
         const elapsed = ((Date.now() - t0) / 1000).toFixed(1)
-        console.log(`  ${embedded}/${rows.length} embedded (${elapsed}s elapsed)`)
+        console.log(`  ${n}/${total} embedded (${elapsed}s elapsed)`)
       }
-    } catch (e: any) {
-      console.warn(`  skipped ${row.id}: ${e?.message ?? e}`)
-      failed++
-    }
-  }
+    },
+  })
 
   const after = await embeddingCount()
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1)
