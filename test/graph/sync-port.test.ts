@@ -93,7 +93,7 @@ run(`INSERT INTO edges (src, dst, rel, label) VALUES ('mem:alpha','mem:beta','LI
   assert.equal(await sync.getEntry('nope'), null, 'missing id → null')
 }
 
-// ── getAllForGraph: nodes carry additive updatedAt+syncedAt; edges {from,to,label} ─
+// ── getAllForGraph: nodes carry additive updatedAt+syncedAt; edges {from,to,rel,label} ─
 {
   const g = await sync.getAllForGraph()
   const node = g.nodes.find((n: any) => n.id === 'mem:alpha')!
@@ -103,8 +103,8 @@ run(`INSERT INTO edges (src, dst, rel, label) VALUES ('mem:alpha','mem:beta','LI
   assert.equal(node.name, 'Alpha Pattern', 'node.name present')
   assert.equal(node.kind, 'memory', 'node.kind present')
   assert.equal(node.scope, 'user', 'node.scope present')
-  assert.deepEqual(g.edges, [{ from: 'mem:alpha', to: 'mem:beta', label: 'related' }],
-    'edge shape {from,to,label} for LINKS_TO only')
+  assert.deepEqual(g.edges, [{ from: 'mem:alpha', to: 'mem:beta', rel: 'LINKS_TO', label: 'related' }],
+    'edge shape {from,to,rel,label}; #126 exports every entries<->entries edge carrying rel')
 }
 
 // ── listScopes / listKinds: {scope|kind, count} desc ──────────────────────────

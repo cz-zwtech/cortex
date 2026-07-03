@@ -87,6 +87,10 @@ export interface GraphNode {
 export interface GraphEdge {
   from: string
   to: string
+  // #126: getAllForGraph now exports every entries<->entries edge carrying its
+  // relation type, so the view can colour/filter by rel. Optional: symbol-overlay
+  // edges may omit it and fall back to the default colour.
+  rel?: string
   label: string
 }
 
