@@ -28,19 +28,41 @@ const EMBEDDING_DIM = 384
 
 let _mode: EmbeddingMode | null = null
 
+// Truthy aliases people reach for instead of the canonical 'local'. Mapping
+// them (rather than fail-safing to 'off') fixes #139 B — CKN_EMBEDDINGS=on used
+// to silently disable embeddings on a node the user meant to turn ON.
+const LOCAL_ALIASES = new Set(['on', 'true', '1'])
+
+/**
+ * Normalize a raw CKN_EMBEDDINGS value to a mode. Canonical modes
+ * (local|remote|off) pass through; truthy aliases (on|true|1) map to 'local';
+ * anything unrecognized is 'off' (fail-safe). Case- and whitespace-insensitive.
+ * Pure — no env read, no cache — so the mapping is unit-testable.
+ */
+export const normalizeEmbeddingMode = (raw: string): EmbeddingMode => {
+  const v = (raw ?? '').toLowerCase().trim()
+  if (v === 'local' || v === 'remote' || v === 'off') return v
+  if (LOCAL_ALIASES.has(v)) return 'local'
+  return 'off'
+}
+
 /**
  * Decide the active mode. Reads CKN_EMBEDDINGS once and caches. Defaults
- * to 'local' when unset. Treats anything not in the enum as 'off' (fail-
- * safe).
+ * to 'local' when unset. Truthy aliases normalize to 'local'; an unrecognized
+ * value fails safe to 'off' but warns once, so a typo doesn't silently disable
+ * embeddings (the #139 footgun class).
  */
 export const getEmbeddingMode = (): EmbeddingMode => {
   if (_mode !== null) return _mode
-  const raw = (process.env.CKN_EMBEDDINGS ?? 'local').toLowerCase().trim()
-  if (raw === 'local' || raw === 'remote' || raw === 'off') {
-    _mode = raw
-  } else {
-    _mode = 'off'
+  const raw = process.env.CKN_EMBEDDINGS ?? 'local'
+  const mode = normalizeEmbeddingMode(raw)
+  if (mode === 'off' && raw.toLowerCase().trim() !== 'off') {
+    console.warn(
+      `[ckn embeddings] CKN_EMBEDDINGS='${raw}' not recognized — using 'off'. ` +
+        `Valid: local | remote | off (on/true/1 -> local).`,
+    )
   }
+  _mode = mode
   return _mode
 }
 
