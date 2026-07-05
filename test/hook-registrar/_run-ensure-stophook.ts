@@ -8,5 +8,9 @@
  */
 import { ensureStopHook } from '../../server/hookRegistrar.js'
 
-await ensureStopHook()
+// The #154 canonical gate inspects the install path (a linked worktree never
+// registers). This test file lives in a worktree, so the parent can point the
+// boot at a synthetic non-worktree projectRoot via CKN_TEST_PROJECT_ROOT to
+// exercise the canonical-registers path; unset = the real PROJECT_ROOT.
+await ensureStopHook(process.env.CKN_TEST_PROJECT_ROOT || undefined)
 process.exit(0)

@@ -40,6 +40,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { refreshHomeCache, baoHomeFetcher } from './cortexHome.js'
+import { decideCanonicalInstall } from './canonicalInstall.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -754,7 +755,7 @@ export const shouldRegisterHooks = (env: Record<string, string | undefined>): bo
  * server boot. Logs each newly-registered item so the user can see what landed
  * without cracking open settings.json.
  */
-export const ensureStopHook = async (): Promise<void> => {
+export const ensureStopHook = async (projectRoot: string = PROJECT_ROOT): Promise<void> => {
   // Ephemeral/test boot (e.g. a server spawned from a worktree by a bus
   // integration test): skip ALL real-user-state registration — home cache,
   // settings hooks, commands, skills — so the test can't hijack ~/.claude / the
@@ -763,11 +764,22 @@ export const ensureStopHook = async (): Promise<void> => {
     console.log('[ckn] ephemeral boot — skipping hook/command/skill registration')
     return
   }
+  // Only the CANONICAL install may write real user state (#154). Even a boot that
+  // FORGOT the ephemeral flag (a test that doesn't set CKN_FORBID_DEFAULT_DB, or a
+  // git worktree) must NOT repoint the home cache / settings / hook fallbacks onto
+  // itself. Auto-detected, not flag-trusted: a linked worktree, or a clone booted
+  // while a different live canonical already owns ~/.config/ckn/home, both SKIP.
+  // All three hijack vectors are downstream of this one gate. See canonicalInstall.ts.
+  const canonical = decideCanonicalInstall({ projectRoot })
+  if (!canonical.register) {
+    console.log(`[ckn] non-canonical boot (${canonical.reason}) — skipping hook/home registration`)
+    return
+  }
   // Seed/refresh the relocatable home cache (~/.config/ckn/home) that the hook shims
   // read on the hot path. Source per CKN_HOME_SOURCE (default local = this install's
   // derived home). Atomic + validate-before-write; best-effort, never throws.
   try {
-    const r = refreshHomeCache({ derivedHome: PROJECT_ROOT, fetchBao: baoHomeFetcher })
+    const r = refreshHomeCache({ derivedHome: projectRoot, fetchBao: baoHomeFetcher })
     if (r.wrote) console.log(`[ckn] home cache ${r.reason}: ${r.value}`)
   } catch {
     /* best-effort — the shim's baked literal covers an unwritten cache */
@@ -777,7 +789,7 @@ export const ensureStopHook = async (): Promise<void> => {
   const added: string[] = []
   const updated: string[] = []
   for (const spec of HOOKS) {
-    const result = ensureHook(settings, spec)
+    const result = ensureHook(settings, spec, projectRoot)
     if (result === 'added') {
       settingsDirty = true
       added.push(`${spec.event}/${spec.marker}`)
@@ -788,7 +800,7 @@ export const ensureStopHook = async (): Promise<void> => {
   }
   // The relocatable hooks expand CORTEX_HOME_DIR; mirror it into the env block so the
   // session + Bash-tool subprocess env carry it too (the FILE cache is the live source).
-  if (ensureHomeEnv(settings)) {
+  if (ensureHomeEnv(settings, projectRoot)) {
     settingsDirty = true
     updated.push('env/CORTEX_HOME_DIR')
   }

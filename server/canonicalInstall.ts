@@ -19,6 +19,8 @@
  * Pathological and acceptable: canonical installs are the main checkout.
  */
 import path from 'node:path'
+import os from 'node:os'
+import fsSync from 'node:fs'
 import { execFileSync } from 'node:child_process'
 
 export interface CanonicalInput {
@@ -83,4 +85,56 @@ export const detectLinkedWorktree = (projectRoot: string): boolean => {
   } catch {
     return false
   }
+}
+
+/** Best-effort realpath; falls back to the input if the path does not exist. */
+const realpathOr = (p: string): string => {
+  try {
+    return fsSync.realpathSync(p)
+  } catch {
+    return p
+  }
+}
+
+/**
+ * Impure composition: gather the FS/git/env inputs and defer to isCanonicalInstall.
+ * Reads the home cache FILE, resolves its existence, realpath-resolves BOTH sides
+ * (so a symlinked install still self-identifies — PM note A, complementing the
+ * pure predicate's lexical normalization), detects a linked worktree, and reads
+ * CKN_CANONICAL_INSTALL. Injectable (homeFilePath, env) for tests.
+ */
+export const decideCanonicalInstall = (opts: {
+  projectRoot: string
+  homeFilePath?: string
+  env?: Record<string, string | undefined>
+}): CanonicalDecision => {
+  const env = opts.env ?? process.env
+  const homeFilePath =
+    opts.homeFilePath ?? path.join(os.homedir(), '.config', 'ckn', 'home')
+
+  let homeFileValue: string | null = null
+  try {
+    homeFileValue = fsSync.readFileSync(homeFilePath, 'utf8').trim() || null
+  } catch {
+    homeFileValue = null
+  }
+
+  let homeDirExists = false
+  let resolvedHome = homeFileValue
+  if (homeFileValue) {
+    try {
+      homeDirExists = fsSync.statSync(homeFileValue).isDirectory()
+    } catch {
+      homeDirExists = false
+    }
+    if (homeDirExists) resolvedHome = realpathOr(homeFileValue)
+  }
+
+  return isCanonicalInstall({
+    projectRoot: realpathOr(opts.projectRoot),
+    homeFileValue: resolvedHome,
+    homeDirExists,
+    isLinkedWorktree: detectLinkedWorktree(opts.projectRoot),
+    explicitCanonical: Boolean(env.CKN_CANONICAL_INSTALL),
+  })
 }
