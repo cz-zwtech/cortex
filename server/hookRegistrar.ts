@@ -104,7 +104,10 @@ const HOOKS: HookSpec[] = [
 export const buildCommand = (scriptName: string, projectRoot: string = PROJECT_ROOT): string =>
   [
     `H="$(cat "$HOME/.config/ckn/home" 2>/dev/null)";`,
-    `H="\${H:-${projectRoot}}";`,
+    // Degrade-with-warn, not silent (#154): a MISSING home cache means the pointer
+    // was lost — fall back to the baked canonical path so hooks keep working, but
+    // shout on stderr so the broken state is visible instead of silently drifting.
+    `if [ -z "$H" ]; then H="${projectRoot}"; printf '[ckn] WARN: home cache $HOME/.config/ckn/home missing; using baked fallback %s\\n' "$H" >&2; fi;`,
     `exec "$H/node_modules/.bin/tsx" "$H/bin/${scriptName}"`,
   ].join(' ')
 

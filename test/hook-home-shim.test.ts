@@ -24,7 +24,8 @@ const SPEC = { event: 'Stop', matcher: '', scriptName: 'ckn-sync.ts', marker: 'c
   const cmd = buildCommand('ckn-sync.ts', ROOT)
   assert.ok(cmd.includes('"$HOME/.config/ckn/home"'), 'reads cache via $HOME')
   assert.ok(!cmd.includes('~/'), 'no tilde form')
-  assert.ok(cmd.includes('${H:-/opt/cortex}'), 'derived-literal fallback')
+  assert.ok(cmd.includes('[ -z "$H" ]') && cmd.includes('H="/opt/cortex"'), 'derived-literal fallback on a missing cache (#154)')
+  assert.ok(cmd.includes('WARN') && cmd.includes('>&2'), 'loud stderr warn when falling back (#154)')
   assert.ok(/\bexec\b/.test(cmd), 'exec for stdin passthrough')
   assert.ok(cmd.includes('/bin/ckn-sync.ts'), 'targets the script')
   assert.ok(cmd.includes('/node_modules/.bin/tsx'), 'invokes tsx')
@@ -49,7 +50,7 @@ const SPEC = { event: 'Stop', matcher: '', scriptName: 'ckn-sync.ts', marker: 'c
   const s: any = {}
   assert.equal(ensureHook(s, SPEC, ROOT), 'added')
   const h = s.hooks.Stop[0].hooks[0]
-  assert.ok(h.command.includes('${H:-/opt/cortex}') && h.command.includes('/bin/ckn-sync.ts'), 'shim command')
+  assert.ok(h.command.includes('H="/opt/cortex"') && h.command.includes('/bin/ckn-sync.ts'), 'shim command')
   assert.equal(h.args, undefined, 'no args field (command-only)')
   ok('ensureHook adds the shim when absent')
 }
@@ -69,7 +70,7 @@ const SPEC = { event: 'Stop', matcher: '', scriptName: 'ckn-sync.ts', marker: 'c
     },
   }
   assert.equal(ensureHook(s, SPEC, ROOT), 'updated', 'old absolute → updated')
-  assert.ok(s.hooks.Stop[0].hooks[0].command.includes('${H:-/opt/cortex}'), 'rewritten to shim')
+  assert.ok(s.hooks.Stop[0].hooks[0].command.includes('H="/opt/cortex"'), 'rewritten to shim')
   ok('ensureHook upgrades an old absolute-path cortex hook to the shim')
 }
 
