@@ -80,14 +80,39 @@ const claudeArtifacts = (home: string) => ({
   ok('CKN_NO_HOOK_REGISTER=1 → also writes nothing')
 }
 
-// ── 3. negative control: a real boot (no flags) DOES register (into tmp) ──────
+// ── 3. positive control: a CANONICAL boot (no flags, non-worktree install,
+//      no prior home pointer = first-install) DOES register (into tmp) ─────────
 {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ckn-hookgate-real-'))
+  // A plain temp dir is not a git worktree, so the #154 gate sees a canonical
+  // (first-install) boot and registers. Points registration at this synthetic
+  // root via CKN_TEST_PROJECT_ROOT so the test's own worktree location doesn't
+  // trip the linked-worktree skip.
+  const canonicalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ckn-canon-root-'))
   const a = claudeArtifacts(home)
-  bootInto(home, {})
-  assert.equal(exists(a.settings), true, 'real boot writes settings.json (into tmp HOME, never real ~/.claude)')
+  const { stdout } = bootInto(home, { CKN_TEST_PROJECT_ROOT: canonicalRoot })
+  // settings.json proves the #154 gate ALLOWED registration (the home-cache write
+  // has its own validate-before-write that a bare synthetic root won't pass — that
+  // path is exercised against a real install in the slice-6 e2e).
+  assert.equal(exists(a.settings), true, 'canonical boot writes settings.json (into tmp HOME, never real ~/.claude)')
+  assert.doesNotMatch(stdout, /non-canonical boot/, 'canonical boot did not skip')
   fs.rmSync(home, { recursive: true, force: true })
-  ok('no flags → ensureStopHook registers as today (hermetic, into tmp HOME)')
+  fs.rmSync(canonicalRoot, { recursive: true, force: true })
+  ok('no flags + canonical (first-install) → ensureStopHook registers (hermetic, into tmp HOME)')
+}
+
+// ── 4. #154: a no-flags boot from a LINKED WORKTREE is auto-skipped (the exact
+//      hijack that broke zwd — a test/worktree server boot that forgot the flag) ─
+{
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ckn-hookgate-worktree-'))
+  const a = claudeArtifacts(home)
+  // No CKN_TEST_PROJECT_ROOT -> real PROJECT_ROOT = this test's worktree checkout.
+  const { stdout } = bootInto(home, {})
+  assert.equal(exists(a.settings), false, 'worktree boot writes NO settings.json')
+  assert.equal(exists(a.homeCache), false, 'worktree boot writes NO home cache')
+  assert.match(stdout, /non-canonical boot \(linked-worktree\)/, 'logged the #154 worktree skip')
+  fs.rmSync(home, { recursive: true, force: true })
+  ok('no flags but a linked worktree → #154 auto-skip (cannot hijack the real home pointer)')
 }
 
 console.log(`\n${passed} assertions passed.`)
