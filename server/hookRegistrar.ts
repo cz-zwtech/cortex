@@ -111,9 +111,9 @@ export const buildCommand = (scriptName: string, projectRoot: string = PROJECT_R
     `exec "$H/node_modules/.bin/tsx" "$H/bin/${scriptName}"`,
   ].join(' ')
 
-const readSettings = async (): Promise<Record<string, any>> => {
+const readSettings = async (settingsPath: string = SETTINGS_PATH): Promise<Record<string, any>> => {
   try {
-    const raw = await fs.readFile(SETTINGS_PATH, 'utf-8')
+    const raw = await fs.readFile(settingsPath, 'utf-8')
     return JSON.parse(raw)
   } catch {
     return {}
@@ -714,8 +714,8 @@ export const sweepRenamedCommands = (commandsDir: string, projectRoot: string): 
   return removed
 }
 
-const ensureCommand = async (spec: CommandSpec): Promise<boolean> => {
-  const target = path.join(COMMANDS_DIR, `${spec.name}.md`)
+const ensureCommand = async (spec: CommandSpec, commandsDir: string = COMMANDS_DIR): Promise<boolean> => {
+  const target = path.join(commandsDir, `${spec.name}.md`)
   const desired = renderCommandFile(spec)
   let existing: string | null = null
   try {
@@ -724,7 +724,7 @@ const ensureCommand = async (spec: CommandSpec): Promise<boolean> => {
     // not yet installed
   }
   if (existing === desired) return false
-  await fs.mkdir(COMMANDS_DIR, { recursive: true })
+  await fs.mkdir(commandsDir, { recursive: true })
   await fs.writeFile(target, desired, 'utf-8')
   return existing === null
 }
@@ -736,14 +736,18 @@ const ensureCommand = async (spec: CommandSpec): Promise<boolean> => {
  * commands, skills were previously not shipped on boot — so a fresh install
  * now gets the codegraph (and any future cortex) skill automatically.
  */
-const ensureSkill = async (name: string): Promise<boolean> => {
+const ensureSkill = async (
+  name: string,
+  skillsDir: string = SKILLS_DIR,
+  repoSkillsDir: string = REPO_SKILLS_DIR,
+): Promise<boolean> => {
   let desired: string
   try {
-    desired = await fs.readFile(path.join(REPO_SKILLS_DIR, name, 'SKILL.md'), 'utf-8')
+    desired = await fs.readFile(path.join(repoSkillsDir, name, 'SKILL.md'), 'utf-8')
   } catch {
     return false // no such skill in the repo
   }
-  const destDir = path.join(SKILLS_DIR, name)
+  const destDir = path.join(skillsDir, name)
   const destFile = path.join(destDir, 'SKILL.md')
   let existing: string | null = null
   try {
@@ -795,16 +799,43 @@ export const ensureStopHook = async (projectRoot: string = PROJECT_ROOT): Promis
     console.log(`[ckn] non-canonical boot (${canonical.reason}) — skipping hook/home registration`)
     return
   }
-  // Seed/refresh the relocatable home cache (~/.config/ckn/home) that the hook shims
-  // read on the hot path. Source per CKN_HOME_SOURCE (default local = this install's
-  // derived home). Atomic + validate-before-write; best-effort, never throws.
+  await registerForHome({ homeDir: os.homedir(), projectRoot })
+}
+
+/**
+ * Install Cortex's full config (8 hooks + slash commands + skills + the home cache)
+ * into a TARGET user's config, for an EXPLICIT install (the parity CLI) — no canonical
+ * gate. TWO orthogonal params:
+ *   `homeDir`     — WHERE files land: the target user's ~/.claude + ~/.config/ckn.
+ *   `projectRoot` — WHAT they point at: the canonical install (hook `tsx`/`bin` paths,
+ *                   CORTEX_HOME_DIR value, home-cache VALUE, skills SOURCE). NEVER let
+ *                   `homeDir` leak into these or the target's hooks exec the wrong bin.
+ * Idempotent + merge-not-clobber (preserves the user's theme/statusLine/other settings).
+ * mkdir -p's every destination so a FRESH user (no ~/.config/ckn) does not fail.
+ */
+export const registerForHome = async (opts: {
+  homeDir: string
+  projectRoot: string
+}): Promise<void> => {
+  const { homeDir, projectRoot } = opts
+  const settingsPath = path.join(homeDir, '.claude', 'settings.json')
+  const commandsDir = path.join(homeDir, '.claude', 'commands')
+  const skillsDir = path.join(homeDir, '.claude', 'skills')
+  const homeCachePath = path.join(homeDir, '.config', 'ckn', 'home')
+  const repoSkillsDir = path.join(projectRoot, 'skills')
+  // Ensure every destination exists up front (a fresh user may lack ~/.config/ckn).
+  for (const d of [path.join(homeDir, '.claude'), commandsDir, skillsDir, path.dirname(homeCachePath)]) {
+    await fs.mkdir(d, { recursive: true })
+  }
+  // Home cache (~/.config/ckn/home): the FILE lands under homeDir, the VALUE is the
+  // canonical projectRoot. Atomic + validate-before-write; best-effort, never throws.
   try {
-    const r = refreshHomeCache({ derivedHome: projectRoot, fetchBao: baoHomeFetcher })
+    const r = refreshHomeCache({ derivedHome: projectRoot, fetchBao: baoHomeFetcher, file: homeCachePath })
     if (r.wrote) console.log(`[ckn] home cache ${r.reason}: ${r.value}`)
   } catch {
     /* best-effort — the shim's baked literal covers an unwritten cache */
   }
-  const settings = await readSettings()
+  const settings = await readSettings(settingsPath)
   let settingsDirty = false
   const added: string[] = []
   const updated: string[] = []
@@ -825,10 +856,10 @@ export const ensureStopHook = async (projectRoot: string = PROJECT_ROOT): Promis
     updated.push('env/CORTEX_HOME_DIR')
   }
   if (settingsDirty) {
-    await writeSettings(settings)
+    await writeSettings(settings, settingsPath)
     if (added.length > 0) {
       console.log(
-        `[ckn] registered ${added.length} hook${added.length === 1 ? '' : 's'} in ~/.claude/settings.json: ${added.join(', ')}`,
+        `[ckn] registered ${added.length} hook${added.length === 1 ? '' : 's'} in ${settingsPath}: ${added.join(', ')}`,
       )
     }
     if (updated.length > 0) {
@@ -837,42 +868,40 @@ export const ensureStopHook = async (projectRoot: string = PROJECT_ROOT): Promis
       )
     }
   }
-  // Slash commands — written under ~/.claude/commands/. Each runs via
-  // ensureCommand which is no-op when the file already matches.
+  // Slash commands — ensureCommand is a no-op when the file already matches.
   const commandsAdded: string[] = []
   for (const spec of COMMANDS) {
-    if (await ensureCommand(spec)) commandsAdded.push(spec.name)
+    if (await ensureCommand(spec, commandsDir)) commandsAdded.push(spec.name)
   }
   if (commandsAdded.length > 0) {
     console.log(
-      `[ckn] installed ${commandsAdded.length} slash command${commandsAdded.length === 1 ? '' : 's'} in ~/.claude/commands/: /${commandsAdded.join(', /')}`,
+      `[ckn] installed ${commandsAdded.length} slash command${commandsAdded.length === 1 ? '' : 's'} in ${commandsDir}: /${commandsAdded.join(', /')}`,
     )
   }
-  // Boot migration for the `cortex-` rename: remove any orphaned OLD-named
-  // Cortex command files (Cortex-owned only). Idempotent — no-op once swept.
-  const commandsSwept = sweepRenamedCommands(COMMANDS_DIR, PROJECT_ROOT)
+  // Boot migration for the `cortex-` rename: remove orphaned OLD-named Cortex command
+  // files (Cortex-owned only). Idempotent — no-op once swept.
+  const commandsSwept = sweepRenamedCommands(commandsDir, projectRoot)
   if (commandsSwept.length > 0) {
     console.log(
-      `[ckn] swept ${commandsSwept.length} renamed slash command${commandsSwept.length === 1 ? '' : 's'} from ~/.claude/commands/: ${commandsSwept.join(', ')}`,
+      `[ckn] swept ${commandsSwept.length} renamed slash command${commandsSwept.length === 1 ? '' : 's'} from ${commandsDir}: ${commandsSwept.join(', ')}`,
     )
   }
-  // Skills — copied under ~/.claude/skills/<name>/SKILL.md. Cortex-owned skills
-  // live in the repo's skills/ dir; ship them on boot like commands so a fresh
-  // install gets the codegraph skill (query + ingest) without a manual copy.
+  // Skills — copied from the repo's skills/ (projectRoot) into the target skillsDir,
+  // so a fresh install gets the codegraph skill without a manual copy.
   const skillsAdded: string[] = []
   let repoSkills: string[] = []
   try {
-    const entries = await fs.readdir(REPO_SKILLS_DIR, { withFileTypes: true })
+    const entries = await fs.readdir(repoSkillsDir, { withFileTypes: true })
     repoSkills = entries.filter((e) => e.isDirectory()).map((e) => e.name)
   } catch {
     // no skills dir in this checkout — nothing to ship
   }
   for (const name of repoSkills) {
-    if (await ensureSkill(name)) skillsAdded.push(name)
+    if (await ensureSkill(name, skillsDir, repoSkillsDir)) skillsAdded.push(name)
   }
   if (skillsAdded.length > 0) {
     console.log(
-      `[ckn] installed ${skillsAdded.length} skill${skillsAdded.length === 1 ? '' : 's'} in ~/.claude/skills/: ${skillsAdded.join(', ')}`,
+      `[ckn] installed ${skillsAdded.length} skill${skillsAdded.length === 1 ? '' : 's'} in ${skillsDir}: ${skillsAdded.join(', ')}`,
     )
   }
 }
