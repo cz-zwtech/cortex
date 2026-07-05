@@ -11,6 +11,7 @@
     "sync": "tsx bin/ckn-sync.ts",
     "sync-shared": "tsx bin/ckn-sync-shared.ts",
     "install-aliases": "tsx bin/ckn-install-aliases.ts",
+    "install-config": "tsx bin/ckn-install-config.ts",
     "seed-onboarding": "tsx bin/ckn-seed-onboarding.ts",
     "uninstall": "tsx bin/ckn-uninstall.ts",
     "build": "tsc -b && vite build",
