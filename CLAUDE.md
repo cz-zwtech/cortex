@@ -67,6 +67,18 @@ tokens) — use env vars / SSH remotes.
    load). `off` for tiny/air-gapped boxes. `remote` is a stub. Set via
    `CKN_EMBEDDINGS`; takes effect on restart.
 
+7. **Per-user parity on a shared / interactive host.** First boot registers config
+   only for the user the server runs as. On a box where *another* user also has
+   interactive Claude Code sessions, give them full parity in one command — run
+   **as that user**, from the canonical install dir:
+   `npm run install-config` (or `tsx bin/ckn-install-config.ts`). It merges the 8
+   hooks + all slash commands + skills into that user's `~/.claude` (preserving their
+   theme / statusLine / other settings), points every hook at this install (their
+   session shares the install; no per-user clone), writes their `~/.config/ckn/home`,
+   sets `CKN_FORCE_SERVER=1` + `CKN_BIND=0.0.0.0`, and installs shell aliases.
+   Idempotent — re-running is a no-op. `--home <dir>` / `--user <name>` target another
+   home (naturally gated by filesystem perms; run-as-self needs no extra privilege).
+
 Env vars that gate the above (full table in README): `CKN_PROFILE`
 (personality surfacing opt-in, default off), `ANTHROPIC_API_KEY`,
 `CKN_EMBEDDINGS`, `CKN_PRIVATE_MIND` / `CKN_PRIVATE_MIND_PATH` /
