@@ -117,9 +117,26 @@ const readSettings = async (): Promise<Record<string, any>> => {
   }
 }
 
-const writeSettings = async (settings: Record<string, any>): Promise<void> => {
-  await fs.mkdir(path.dirname(SETTINGS_PATH), { recursive: true })
-  await fs.writeFile(SETTINGS_PATH, JSON.stringify(settings, null, 4), 'utf-8')
+/**
+ * Persist settings.json crash/concurrency-safely: back up the prior file once
+ * (a single rolling `.bak-cortex`, so a clobbered out-of-band edit is recoverable),
+ * then replace ATOMICALLY via a temp sibling + rename (same-fs rename is atomic —
+ * a reader never sees a half-written file). `settingsPath` is injectable for tests.
+ */
+export const writeSettings = async (
+  settings: Record<string, any>,
+  settingsPath: string = SETTINGS_PATH,
+): Promise<void> => {
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true })
+  const body = JSON.stringify(settings, null, 4)
+  try {
+    await fs.copyFile(settingsPath, `${settingsPath}.bak-cortex`)
+  } catch {
+    /* no prior file to back up (first write) */
+  }
+  const tmp = `${settingsPath}.tmp-${process.pid}`
+  await fs.writeFile(tmp, body, 'utf-8')
+  await fs.rename(tmp, settingsPath)
 }
 
 /**
