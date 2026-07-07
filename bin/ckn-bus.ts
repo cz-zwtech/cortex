@@ -6,7 +6,7 @@
  * If the server is down, this prints a clear message and exits non-zero — it
  * never direct-opens the graph.
  *
- *   ckn-bus peers
+ *   ckn-bus peers [--all]             # roster; hides signed_off anchors unless --all
  *   ckn-bus send --to <name|id|*> --body "text" [--from <id>] [--ref <msgid>] [--kind msg|reply] [--human]
  *   ckn-bus inbox [--session <id>] [--all]
  *   ckn-bus ack --id <msgid> [--session <id>] [--done]
@@ -23,6 +23,7 @@
 import { isServerUp, SERVER_URL } from './_graph-guard.js'
 import { resolveSelfSessionId, localTranscriptIds } from './_session-id.js'
 import { resolveRecipient, type Peer } from './_resolve-recipient.js'
+import { visiblePeers } from './_peers-view.js'
 import {
   watcherShouldExit,
   heartbeatTouch,
@@ -177,11 +178,14 @@ const main = async () => {
   switch (cmd) {
     case 'peers': {
       const { peers } = await get('/peers')
-      for (const p of peers) {
+      const shown = visiblePeers(peers as Peer[], has('--all'))
+      for (const p of shown) {
         console.log(
           `${p.status.padEnd(10)} ${p.friendlyName.padEnd(20)} ${(p.machine || '?').padEnd(14)} ${p.cwd}  (${p.sessionId.slice(0, 8)})`,
         )
       }
+      const hidden = peers.length - shown.length
+      if (hidden > 0) console.log(`(${hidden} signed_off hidden — ckn-bus peers --all to show)`)
       break
     }
     case 'send': {
