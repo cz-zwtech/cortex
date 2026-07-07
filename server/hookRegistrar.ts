@@ -61,14 +61,18 @@ interface HookSpec {
   timeout: number
 }
 
-const HOOKS: HookSpec[] = [
+export const HOOKS: HookSpec[] = [
   { event: 'Stop',         matcher: '', scriptName: 'ckn-sync.ts',       marker: 'ckn-sync',       timeout: 30 },
   { event: 'PostToolUse',  matcher: '', scriptName: 'ckn-recall.ts',     marker: 'ckn-recall',     timeout: 5 },
   // UserPromptSubmit: emit the periodic /cortex-snapshot reminder at a natural
   // pause (the boundary between user input and assistant work) rather
   // than mid-tool-chain. Counter still bumped in PostToolUse.
-  { event: 'UserPromptSubmit', matcher: '', scriptName: 'ckn-pause-context.ts', marker: 'ckn-pause-context', timeout: 3 },
-  { event: 'PreToolUse',   matcher: '', scriptName: 'ckn-aware.ts',      marker: 'ckn-aware',      timeout: 3 },
+  // 10s (not 3s): a cold resume against a large graph / slow server needs headroom
+  // to deliver presence + inbox; at 3s the hook timed out and CC discarded its whole
+  // output, silently dropping the inbox. ckn-pause-context also self-bounds its work.
+  { event: 'UserPromptSubmit', matcher: '', scriptName: 'ckn-pause-context.ts', marker: 'ckn-pause-context', timeout: 10 },
+  // 10s for the same cold-resume reason (ckn-aware runs on the same tight boundary).
+  { event: 'PreToolUse',   matcher: '', scriptName: 'ckn-aware.ts',      marker: 'ckn-aware',      timeout: 10 },
   // SessionStart (matcher '' = all sources) ALSO covers /compact: CC ≥2.1 fires
   // SessionStart with source="compact" after a compaction, so this single
   // registration re-injects the capability sheet post-compact via valid JSON. We do
@@ -167,9 +171,13 @@ export const ensureHook = (
       if (!cmd.includes(spec.marker)) continue
       found = true
       // Rewrite if the command drifted (old absolute path / moved repo / stale baked
-      // literal) OR the command-only invariant is violated: an `args` field switches
-      // the hook to exec form, which would NOT shell-expand the $HOME cache shim.
-      if (cmd !== command || h.args !== undefined) {
+      // literal) OR the command-only invariant is violated (an `args` field switches
+      // the hook to exec form, which would NOT shell-expand the $HOME cache shim) OR
+      // the timeout drifted from the spec. The timeout check matters because an
+      // already-installed hook whose command still matches otherwise takes the noop
+      // path and keeps its OLD timeout — so a raised default (e.g. 3s → 10s for the
+      // cold-resume budget fix) would never reach existing installs without it.
+      if (cmd !== command || h.args !== undefined || h.timeout !== spec.timeout) {
         h.command = command
         h.timeout = spec.timeout
         if (h.args !== undefined) delete h.args
