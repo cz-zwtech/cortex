@@ -4,9 +4,10 @@
  *
  * Seeds presence rows at varied ages/status (register via the API, then back-date
  * `last_seen` + set `status` directly in the temp DB), calls POST
- * /api/bus/prune-sessions, then GET /api/bus/peers and asserts the dead rows are
- * GONE while live/idle/recent SURVIVE. Also asserts a session's `entries`
- * stub-node + incident edge are cleaned (no orphan node lingers).
+ * /api/bus/prune-sessions, then GET /api/bus/peers and asserts ONLY rows past the
+ * 90d hard cap are GONE while live/idle/recent AND signed_off ANCHORS under the cap
+ * SURVIVE (anchor model — a retained signed_off row lets a resume UPDATE-rebind).
+ * Also asserts a pruned session's `entries` stub-node + incident edge are cleaned.
  */
 import assert from 'node:assert/strict'
 import os from 'node:os'
@@ -80,7 +81,7 @@ try {
     idle: 'sp-idle',
     recent: 'sp-recent',
     signedOld: 'sp-signed-25h',
-    abandoned: 'sp-abandoned-31d',
+    abandoned: 'sp-abandoned-100d',
   }
   for (const id of Object.values(ids)) {
     await post('/register', { sessionId: id, cwd: `/tmp/${id}`, machine: 'm1' })
@@ -98,9 +99,9 @@ try {
     const setStatus = db.prepare('UPDATE session_meta SET status = ?, last_seen = ? WHERE id = ?')
     setSeen.run(now - 1 * MIN, ids.live) // live → keep
     setSeen.run(now - 30 * MIN, ids.idle) // idle → keep
-    setSeen.run(now - 2 * HOUR, ids.recent) // stale but <30d, never signed off → keep
-    setStatus.run('signed_off', now - 25 * HOUR, ids.signedOld) // signed_off >24h → prune
-    setSeen.run(now - 31 * DAY, ids.abandoned) // any status >30d → prune
+    setSeen.run(now - 2 * HOUR, ids.recent) // stale but <90d, never signed off → keep
+    setStatus.run('signed_off', now - 25 * HOUR, ids.signedOld) // signed_off but <90d → ANCHOR, keep
+    setSeen.run(now - 100 * DAY, ids.abandoned) // any status >90d → prune
 
     // Give the abandoned session an entries stub-node + an incident edge, to prove
     // the prune removes graph residue (no orphan node/edge lingers).
@@ -122,15 +123,19 @@ try {
 
   // Prune.
   const { pruned } = await post('/prune-sessions', {})
-  assert.equal(pruned, 2, 'prunes exactly the 2 dead rows (signed_off>24h + >30d)')
+  assert.equal(
+    pruned,
+    1,
+    'prunes exactly the 1 row past the 90d cap; signed_off anchors under the cap are retained',
+  )
 
-  // Dead gone, live/idle/recent survive.
+  // Over-cap row gone; live/idle/recent AND the signed_off anchor survive.
   present = await peerIds()
-  assert.ok(!present.has(ids.signedOld), 'signed_off >24h row is GONE')
-  assert.ok(!present.has(ids.abandoned), 'any-status >30d row is GONE')
+  assert.ok(present.has(ids.signedOld), 'signed_off anchor under 90d SURVIVES (retained for resume rebind)')
+  assert.ok(!present.has(ids.abandoned), 'any-status >90d row is GONE')
   assert.ok(present.has(ids.live), 'live row SURVIVES')
   assert.ok(present.has(ids.idle), 'idle row SURVIVES')
-  assert.ok(present.has(ids.recent), 'stale-but-recent (under 30d, never signed off) row SURVIVES')
+  assert.ok(present.has(ids.recent), 'stale-but-recent (never signed off, under 90d) row SURVIVES')
 
   // The abandoned session's graph residue is cleaned (no orphan node/edge).
   const verify = new Database(DB_PATH, { readonly: true })
