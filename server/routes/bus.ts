@@ -191,7 +191,8 @@ busRouter.get('/peers', async (_req, res) => {
 })
 
 // POST /api/bus/prune-sessions — on-demand prune of stale presence rows.
-// Without a body: TTL-based prune (signed_off >24h, any status >30d). Reversible.
+// Without a body: hard-cap prune (any status idle >90d). A signed_off/stale row
+// under the cap is RETAINED as a durable resume anchor (anchor model).
 // With { machine } body: purge ALL rows for that machine (test-pollution cleanup).
 //   Returns { machine, deleted } when machine is present, else { pruned }.
 busRouter.post('/prune-sessions', (req, res) => {
