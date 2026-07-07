@@ -30,6 +30,7 @@ import { assignmentCoherence } from '../server/bus/mandate.js'
 // Reassemble paginated parts at the read layer so the agent sees one whole
 // message, not [[ckn-page]] fragments (within the protocol freeze).
 import { reassembleList } from './_bus-paginate.js'
+import { fetchBounded, watcherScanFitsBudget } from './_hook-budget.js'
 import { resolveSelfSessionId } from './_session-id.js'
 import { triggerTurnSyncRequest } from './_turn-sync-trigger.js'
 
@@ -114,11 +115,15 @@ const busDeliveryBlock = async (sid: string, cwd: string, machine: string): Prom
     // Self-healing heartbeat: revive presence + bump last_seen on every genuine
     // user prompt. Covers a SessionStart registration that silently failed
     // (server was down) and a -c/--resume of a signed-off session. Best-effort.
-    await fetch(`${SERVER_URL}/api/bus/touch`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: sid, cwd, machine }),
-    }).catch(() => {})
+    await fetchBounded(
+      `${SERVER_URL}/api/bus/touch`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: sid, cwd, machine }),
+      },
+      1500,
+    )
     const ctrl = new AbortController()
     const t = setTimeout(() => ctrl.abort(), 2000)
     const res = await fetch(
@@ -148,11 +153,15 @@ const busDeliveryBlock = async (sid: string, cwd: string, machine: string): Prom
       }>
     }
     if (!messages.length) return ''
-    await fetch(`${SERVER_URL}/api/bus/delivered`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: sid, ids: messages.map((m) => m.id) }),
-    }).catch(() => {})
+    await fetchBounded(
+      `${SERVER_URL}/api/bus/delivered`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: sid, ids: messages.map((m) => m.id) }),
+      },
+      1500,
+    )
     // Mandate-in-presence (Item 1): pull presence to surface (a) each SENDER's
     // mandate (for the peer/coherence judgment) and (b) THIS session's own
     // orchestration state + anchor (for the state/anchor checks). Best-effort —
@@ -391,6 +400,7 @@ const readStdin = (): Promise<string> =>
   })
 
 const main = async (): Promise<void> => {
+  const startedAt = Date.now()
   const raw = await readStdin()
   let input: HookInput = {}
   try {
@@ -409,10 +419,17 @@ const main = async (): Promise<void> => {
   const busBlock = await busDeliveryBlock(sid, cwd, readMachineId())
   if (turnSync) await turnSync
   // Watcher self-check: nudge until a real-time watcher is armed for this
-  // session. Skipped for internal subprocesses (never bus peers) and when the
-  // server is the gate — only nag if the bus is actually in play (server up).
+  // session. Skipped for internal subprocesses (never bus peers). The scan is a
+  // synchronous /proc walk on the critical path, so it is GATED on the remaining
+  // budget — once the bus work has consumed the soft budget we skip the scan (the
+  // nag re-appears next prompt / the statusline still shows it) so a slow cold
+  // resume never pushes the whole hook past its timeout and discards the inbox.
   const watcherNudge =
-    !WATCHER_NUDGE_DISABLED && !isInternalCwd(cwd) && sid && !watcherRunningForSession(sid)
+    !WATCHER_NUDGE_DISABLED &&
+    !isInternalCwd(cwd) &&
+    sid &&
+    watcherScanFitsBudget(Date.now() - startedAt) &&
+    !watcherRunningForSession(sid)
       ? renderWatcherNudge()
       : ''
   const parts = [busBlock, watcherNudge, snapshot].filter(Boolean)
