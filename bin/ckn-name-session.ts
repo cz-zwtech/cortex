@@ -27,7 +27,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import Anthropic from '@anthropic-ai/sdk'
 import { resolveAnthropicKey } from './_anthropic-key.js'
 import { projectDirForSession, resolveSelfSessionId } from './_session-id.js'
@@ -38,6 +38,10 @@ const __dirname = path.dirname(__filename)
 const COUNTER_PATH = path.join(os.homedir(), '.config', 'ckn', 'auto-name-counter.json')
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
 const execFileP = promisify(execFile)
+
+// Honors CKN_SERVER_URL (same override convention as ckn-bus / _graph-guard) so an
+// ephemeral-server test can point the presence re-assert at its own port.
+const SERVER_URL = process.env.CKN_SERVER_URL ?? 'http://localhost:3001'
 
 interface Args {
   sessionId: string
@@ -307,6 +311,45 @@ const triggerSync = (): void => {
   } catch {}
 }
 
+/**
+ * Re-assert this session's LIVE bus presence with the new title. ckn-name-session
+ * otherwise only appends a `custom-title` to the JSONL, but whoami/peers read
+ * `session_meta.friendly_name`, which `registerSession` refreshes only at the NEXT
+ * SessionStart — so a mid-session rename stays invisible on the bus (and a hollow
+ * post-resume row stays bare) until this POST lands the title on the live row now.
+ * The register name-floor does NOT help a bare prior name, so the explicit title
+ * here is what overrides it. Best-effort: on any failure the JSONL title still
+ * stands and reconciles at the next SessionStart. Exported (baseUrl DI) for tests.
+ */
+export const reassertPresence = async (
+  sid: string,
+  cwd: string,
+  title: string,
+  baseUrl: string = SERVER_URL,
+): Promise<void> => {
+  try {
+    let machine = ''
+    try {
+      machine = fsSync
+        .readFileSync(path.join(os.homedir(), '.config', 'ckn', 'machine-id'), 'utf-8')
+        .trim()
+    } catch {
+      /* lineage stamp optional */
+    }
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), 2000)
+    await fetch(`${baseUrl}/api/bus/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: sid, title, cwd, machine }),
+      signal: ctrl.signal,
+    })
+    clearTimeout(t)
+  } catch {
+    /* best-effort: JSONL title stands; presence reconciles at next SessionStart */
+  }
+}
+
 const main = async (): Promise<void> => {
   const args = parseArgs()
   if (!args.cwd) {
@@ -355,6 +398,7 @@ const main = async (): Promise<void> => {
   }
 
   await appendCustomTitle(jsonlPath, args.sessionId, title)
+  await reassertPresence(args.sessionId, args.cwd!, title)
   triggerSync()
 
   console.log(
@@ -362,7 +406,10 @@ const main = async (): Promise<void> => {
   )
 }
 
-main().catch((e) => {
-  console.error('[ckn name-session] fatal:', e?.message ?? e)
-  process.exit(1)
-})
+const isEntry = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
+if (isEntry) {
+  main().catch((e) => {
+    console.error('[ckn name-session] fatal:', e?.message ?? e)
+    process.exit(1)
+  })
+}
