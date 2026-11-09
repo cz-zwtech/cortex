@@ -1,0 +1,43 @@
+# Every file a fresh install plus one session start creates under the user's HOME (fresh-install.sh).
+# One path per line, relative to HOME; <ts> and <uuid> stand for volatile parts of names, and a
+# sqlite database stands for its -wal/-shm/-journal sidecars too.
+.claude/CLAUDE.md
+.claude/commands/cortex-gate.md
+.claude/commands/cortex-memory.md
+.claude/commands/cortex-mesh.md
+.claude/commands/cortex-rename.md
+.claude/commands/cortex-role.md
+.claude/commands/cortex-rules.md
+.claude/commands/cortex-status.md
+.claude/commands/cortex-statusline.md
+.claude/commands/cortex-telegram.md
+.claude/commands/cortex-update.md
+.claude/cortex/rules.md
+.claude/settings.json.bak-cortex
+.config/ckn/backups/index.jsonl
+.config/ckn/backups/memory-<ts>-first-sweep.tgz
+.config/ckn/backups/memory-<ts>-install.tgz
+.config/ckn/cortex.sqlite
+.config/ckn/data/memory/capture-detached.log
+.config/ckn/data/memory/context.sqlite
+.config/ckn/data/memory/count
+.config/ckn/data/memory/first-sweep-backup.json
+.config/ckn/data/memory/schedule-detached.log
+.config/ckn/data/memory/sweeps.jsonl
+.config/ckn/data/mesh/mesh.sqlite
+.config/ckn/data/mesh/node.json
+.config/ckn/data/schedule.json
+.config/ckn/hook-trace.ndjson
+.config/ckn/machine-id
+.config/ckn/modules/comms
+.config/ckn/modules/gateway
+.config/ckn/modules/memory
+.config/ckn/modules/private-mind
+.config/ckn/modules/telegram
+.config/ckn/statusline.d/10-memory.sh
+.config/ckn/statusline.d/20-comms.sh
+.local/bin/cortex-gate
+.local/bin/cortex-mesh
+.local/bin/cortex-mind
+.local/bin/cortex-role
+.local/bin/cortex-telegram

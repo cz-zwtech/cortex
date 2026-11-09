@@ -1,0 +1,102 @@
+{
+  "name": "comms",
+  "version": "0.2.0",
+  "requiresCore": ">=2.0.0 <3.0.0",
+  "description": "Role mailboxes and the mesh: messages go to roles, never to session ids, through one record log; the mesh links nodes when the node is set to connect. Member identity rides the session title.",
+  "cli": [
+    "core:bin/cortex-role.ts",
+    "core:bin/cortex-mesh.ts"
+  ],
+  "provides": [
+    "comms.send",
+    "comms.inbox",
+    "comms.markSeen",
+    "comms.claim",
+    "comms.reply",
+    "comms.workContext",
+    "comms.sessionRoles",
+    "comms.ensureMember",
+    "comms.roles",
+    "comms.meshRoles",
+    "comms.logPublish",
+    "comms.logRead",
+    "comms.nodes",
+    "comms.onAdopted",
+    "comms.intent",
+    "comms.markAwait",
+    "comms.leaveRole"
+  ],
+  "storage": {
+    "use": "self"
+  },
+  "subscribes": [
+    {
+      "event": "SessionStart",
+      "handler": "server/mesh/on-session-start.ts",
+      "order": 1
+    },
+    {
+      "event": "SessionStart",
+      "handler": "server/on-session-start.ts",
+      "order": 5
+    },
+    {
+      "event": "UserPromptSubmit",
+      "handler": "server/on-user-prompt.ts",
+      "order": 5
+    },
+    {
+      "event": "Stop",
+      "handler": "server/on-stop.ts",
+      "order": 5
+    }
+  ],
+  "routes": [],
+  "commands": [
+    {
+      "sub": "role",
+      "file": "commands/role.md",
+      "summary": "Cortex roles and role-addressed messages"
+    },
+    {
+      "sub": "mesh",
+      "file": "commands/mesh.md",
+      "summary": "The Cortex mesh: status, start, stop, peers, connect"
+    }
+  ],
+  "tests": [
+    "test/comms.test.ts",
+    "test/session.test.ts",
+    "test/watch.test.ts",
+    "test/external.test.ts",
+    "test/move.test.ts",
+    "test/directory.test.ts",
+    "test/suggest.test.ts",
+    "test/meshWho.test.ts",
+    "test/renames.test.ts",
+    "test/dialogue.test.ts",
+    "test/mesh/mesh.test.ts",
+    "test/mesh/routed.test.ts",
+    "test/mesh/files.test.ts",
+    "test/mesh/nodeConfig.test.ts",
+    "test/mesh/live.test.ts",
+    "test/mesh/seams.test.ts",
+    "test/mesh/connect.test.ts"
+  ],
+  "extends": [
+    {
+      "command": "rename",
+      "args": "[role]",
+      "summary": "also join this role under the new name (a role that does not exist is created)"
+    }
+  ],
+  "dialogue": true,
+  "update": {
+    "before": "core:bin/cortex-mesh.ts pause",
+    "after": "core:bin/cortex-mesh.ts resume"
+  },
+  "statusline": {
+    "script": "statusline.sh",
+    "order": 20
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "telegram",
+  "version": "0.1.0",
+  "requiresCore": ">=2.0.0 <3.0.0",
+  "description": "Operator notifications over Telegram bots: store-first, fallback clocks, operator-only inbound, several bots by config.",
+  "runs": "host",
+  "provides": [
+    "telegram.publish",
+    "telegram.send",
+    "telegram.replies",
+    "telegram.claim",
+    "telegram.status"
+  ],
+  "cli": [
+    "bin/cortex-telegram.ts"
+  ],
+  "optional": [
+    "comms"
+  ],
+  "storage": {
+    "use": "self"
+  },
+  "commands": [
+    {
+      "sub": "telegram",
+      "file": "commands/telegram.md",
+      "summary": "Operator notifications over Telegram: send, show, ack, replies, await, claim, digest"
+    }
+  ],
+  "tests": [
+    "test/items.test.ts",
+    "test/explicit-config.test.ts",
+    "test/inbound.test.ts",
+    "test/http.test.ts",
+    "test/multibot.test.ts",
+    "test/commands.test.ts",
+    "test/importer.test.ts",
+    "test/service.test.ts",
+    "test/dialogue.test.ts"
+  ],
+  "dialogue": true
+}

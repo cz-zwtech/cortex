@@ -1,0 +1,43 @@
+{
+  "name": "hello-world",
+  "version": "1.0.0",
+  "requiresCore": ">=2.0.0 <3.0.0",
+  "description": "The smallest complete module. Exists to prove the contract, and to be the documented example.",
+  "provides": [
+    "hello-world.greet"
+  ],
+  "subscribes": [
+    {
+      "event": "SessionStart",
+      "handler": "./server/onSessionStart.js",
+      "order": 100
+    }
+  ],
+  "routes": [
+    {
+      "mount": "/api/hello",
+      "handler": "./server/routes.js"
+    }
+  ],
+  "commands": [
+    {
+      "sub": "hello",
+      "file": "commands/hello.md",
+      "summary": "Say hello from the example module"
+    }
+  ],
+  "ui": {
+    "navTitle": "Hello",
+    "icon": "wave",
+    "pages": [
+      {
+        "route": "/hello",
+        "title": "Hello World",
+        "entry": "ui/HelloView.js"
+      }
+    ]
+  },
+  "tests": [
+    "test/greet.test.ts"
+  ]
+}

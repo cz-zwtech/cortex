@@ -1,0 +1,32 @@
+{
+  "name": "gateway",
+  "version": "0.1.0",
+  "requiresCore": ">=2.0.0 <3.0.0",
+  "description": "The domain gateway: the only path between this Cortex and another owner's. Pinned-key TLS to peer gateways, roles exposed only when ticked, communication in and never action, standing return paths, a mailbox, and a hash-chained audit.",
+  "cli": [
+    "bin/cortex-gate.ts"
+  ],
+  "provides": [],
+  "requires": [
+    "comms"
+  ],
+  "optional": [],
+  "storage": {
+    "use": "self"
+  },
+  "subscribes": [],
+  "routes": [],
+  "commands": [
+    {
+      "sub": "gate",
+      "file": "commands/gate.md",
+      "summary": "The domain gateway: status, key, paths, audit"
+    }
+  ],
+  "tests": [
+    "test/config.test.ts",
+    "test/link.test.ts",
+    "test/flow.test.ts",
+    "test/audit.test.ts"
+  ]
+}

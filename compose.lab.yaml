@@ -1,0 +1,91 @@
+# Cortex V2 lab.
+#
+# Decisions this file encodes (Phase 0/1, approved):
+#   - ports 3011 (server) / 1430 (vite), bound to LOOPBACK only
+#   - own graph volume; the container is its own "machine"
+#   - ISOLATED BY DEFAULT: no mesh, no private-mind, no profile federation
+#   - real-mesh attach is opt-in and temporary, for comms testing only
+#
+# The containment line, stated so nobody has to infer it: private-mind sync and
+# profile federation are OFF PERMANENTLY in the lab. No lab memory ever
+# federates into a real graph. Mesh join, when it happens at all, is
+# coordination-layer only.
+
+services:
+  cortex-lab:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        UID: "1000"
+        GID: "1000"
+    image: cortex-lab:dev
+    container_name: cortex-lab
+    init: true
+    restart: "no"          # a lab is torn down and rebuilt, never resurrected
+
+    # The entrypoint starts sshd and then holds the container open, so the TTY
+    # workaround an earlier revision needed is gone.
+
+    # A human signs in to Claude Code interactively INSIDE this container
+    # (OAuth requires it). Reached by SSHing to the host, then to the
+    # container's bridge address — NOT by publishing an SSH port. The bridge is
+    # host-local and not LAN-routable, so this adds no network exposure. A
+    # fixed address keeps the connection command stable across recreations.
+    networks:
+      lab:
+        ipv4_address: 172.31.7.2
+
+    # Loopback only. The host's V1 install binds 0.0.0.0 in worker mode; the
+    # lab deliberately does not, so an experiment can never be reached from
+    # the network while it is mid-iteration.
+    ports:
+      - "127.0.0.1:3011:3011"
+      - "127.0.0.1:1430:1430"
+
+    volumes:
+      # Persisted lab state. Isolated from the host's ~/.config/ckn.
+      - cortex-lab-state:/home/node/.config/ckn
+      # The V2 working tree, live-mounted so iteration does not need a rebuild.
+      - ./:/opt/cortex:rw
+      # node_modules stays inside the container: native builds (better-sqlite3,
+      # node-pty) must not be shared with the host's differently-built copies.
+      - cortex-lab-modules:/opt/cortex/node_modules
+      # Authorized key for the interactive sign-in, mounted read-only rather
+      # than baked into the image — this image is meant to become the public
+      # self-host artifact, and a committed key would ship with it.
+      - ${UAT_AUTHORIZED_KEYS:-./.uat-authorized_keys}:/run/secrets/authorized_keys:ro
+
+    environment:
+      CKN_PORT: "3011"
+      CKN_BIND: "127.0.0.1"
+
+      # --- identity: the container is its own machine -------------------
+      CKN_NODE_ID: "cortex-lab"
+
+      # --- isolation: fail-closed, and closed on purpose ----------------
+      # Mesh is fail-closed by design — no token means mesh stays OFF even if
+      # peers are configured. Stated explicitly rather than relied upon.
+      CKN_MESH_TOKEN: ""
+      CKN_MESH_PEERS: ""
+      # Permanent, not a default. See the containment line above.
+      CKN_PRIVATE_MIND: "off"
+      CKN_MIND_PUSH_ON_BOOT: "0"
+
+      # --- keep the lab cheap ------------------------------------------
+      CKN_EMBEDDINGS: "off"
+
+    working_dir: /opt/cortex
+
+volumes:
+  cortex-lab-state:
+    name: cortex-lab-state
+  cortex-lab-modules:
+    name: cortex-lab-modules
+
+networks:
+  lab:
+    name: cortex-lab-net
+    ipam:
+      config:
+        - subnet: 172.31.7.0/24

@@ -1,150 +1,70 @@
 # Cortex
 
-**Memory is table stakes. Cortex gives your [Claude Code](https://www.anthropic.com/claude-code)
-sessions a shared mind — and makes them work it as a team.**
+> **Coming from Cortex V1?** This repository is now V2, a rewrite. Do not restart V1 from this checkout. Read [ATTENTION.md](ATTENTION.md), then follow [docs/migrating-from-v1.md](docs/migrating-from-v1.md). V1 stays available as the tag `v1-final`.
 
-Every session you run feeds one persistent, graph-structured mind: what you
-learned, what failed and how you fixed it, how your code connects, how you like
-to work. Every later session draws on it automatically — on this machine or any
-of yours. And sessions running side by side aren't strangers: they see each
-other, message each other, split work, hand off, and review each other over
-that same mind. Not a per-chat scratchpad — one portable memory, several pairs
-of hands.
+Cortex is a modular layer for Claude Code. A small core plugs into Claude Code's hooks once, and modules add what you install: persistent memory, messaging between sessions and machines, one mind across your own machines, a gateway to other organisations, and operator notifications.
 
-Under the hood it's a typed graph (sessions, facts, fail→success patterns, code
-symbols, and the relationships between them) in a local SQLite file **you own** —
-inspectable, portable, and surface-agnostic by design: a local graph behind an
-API, with Claude Code as its deepest client, not its cage. The hooks ride
-*under* your normal sessions; recall walks the graph's edges so the right
-memory surfaces at the moment you're about to need it. Dogfooded daily across
-a multi-machine fleet — including the day its own coordination layer caught
-and fixed bugs in Cortex itself.
+## What it does
 
-Memory alone is a scratchpad that forgets where you work — what changes things
-is a mind your sessions *share* and *work*.
+- **Core.**
+  - **Hooks.** Registers one hook per Claude Code lifecycle event. Modules subscribe in-process, so installing or removing a module leaves `settings.json` unchanged.
+  - **Modules.** Discovers modules, resolves their dependencies (an install is refused when a hard dependency is missing) and checks version compatibility.
+  - **Commands.** Installs their slash commands and CLIs.
+  - **Status line and updates.** A small status line segment that installed modules extend with their own parts, and in-place updates that modules hook into.
+  - **Install and status.** Install, uninstall, status, backup and an isolated test runner.
+- **memory.**
+  - **Storage.** Memories live in a graph store, with recall that ranks by relevance, usage, links and recency, and decay over time. A journal is the source of truth; the graph is derived from it.
+  - **Capture.** Memory files written during sessions are swept into the store.
+  - **Standing rules.** Rules can be checked against what a session writes.
+- **comms.** Messaging, on one machine and across machines.
+  - **Role mailboxes.** Messages go to roles, never to session ids, and a session joins a role under a member name. A watcher delivers messages as they arrive; work messages carry claims, so two members never act on the same one.
+  - **Local-only by default.** On one machine, messages go through a local log, with no daemon, no open port and no outbound link.
+  - **The mesh, when you connect.** Connecting is a setting, not an install: `cortex-mesh listen on` lets other nodes dial in, `cortex-mesh peers add <host:port>` dials one. Nodes stream the log over one WebSocket link per pair, with link-state routing across hops and files sent through a secret scan.
+- **private-mind.** One mind across your own machines: what you learn on one is recallable on the others. Knowledge syncs through a central node you choose; working detail stays on the machine that wrote it and travels only as a pointer; nothing passes a gateway. Off until enabled per node; a machine with no long-running service syncs from its session hooks.
+- **gateway.** The only path between your Cortex and another organisation's.
+  - **Links.** Mutual TLS between gateways, pinned by key.
+  - **Exposure.** Only the roles you expose are reachable, and peer messages are data, never commands.
+  - **Return paths, mailbox, secrets.** Replies come back by standing return paths; a mailbox holds messages for home nodes; a secret scan holds outbound messages for review.
+  - **Audit.** Every crossing is written to a hash-chained audit log.
+- **telegram.** Operator notifications through Telegram bots you configure (there is no built-in bot): store-first delivery, fallback clocks, inbound messages from operators only, several bots by config. Secrets come from environment variables or OpenBao.
 
-## What that feels like
+## Requirements
 
-- **Friday desktop, Monday café.** You crack the bug Friday at the desk. Monday
-  on the laptop, the fix is there — and so are the dead-ends you already ruled
-  out. Nothing hand-synced, nothing re-explained. *(shipped → [private mind](docs/minds/private-mind.md))*
-- **Your teammate's two bad days become your good one.** She tames staging's
-  quirks and publishes the lesson; next week you hit the same wall and her
-  notes surface automatically, with her name on them. Knowledge compounds
-  instead of walking out on PTO. *(shipped → [team mind](docs/minds/team-mind.md))*
-- **Three conversations, one line of thought.** The auth design from Tuesday,
-  Wednesday's UI review, this morning's hardware quirk — separate sessions,
-  one graph. The moment they connect, the synthesis is already linked and
-  recall pulls the whole thread, not three fragments. *(shipped → [memory](docs/memory/pipeline.md))*
-- **You stop being the context janitor.** The model still has a context window —
-  what changes is that the *thread* lives in the graph: capture is automatic,
-  work-in-flight survives compaction, and a fresh session picks it up with
-  `/cortex-continue` — no `--resume`, no re-pasting. *(shipped → [coordination](docs/coordination/overview.md))*
-
-And the reflexes, firing before you ask: the gotcha note *you* wrote surfacing
-at first tool-use ([recall](docs/memory/recall.md)) · last time's fail→success
-trace arriving with a repeat error ([patterns](docs/memory/extraction.md)) ·
-who-depends-on-this injected before you edit, not in review
-([codegraph](docs/codegraph/codegraph.md)).
-
-> **And one for later — vision, not shipped:** you and your partner plan a trip
-> from your *own* assistants, on your *own* accounts, sharing one trip-mind —
-> the hotel you both liked, what each of you picked, what's booked, what's
-> still loose. No shared login. Connected, not merged. The surface-agnostic
-> design above is what points here.
-
-## What Cortex gives you
-
-1. **Live session monitor** — every Claude Code session you run is parsed, indexed, and visualized. → [the UI](docs/ui.md)
-2. **Configuration manager** — view, edit, and promote agents / commands / skills / rules / hooks / permissions / MCP servers across user and project scopes. → [the UI](docs/ui.md)
-3. **Graph-structured memory** — memory files, vault notes, and fail→success patterns become a typed graph; recall combines vector seeds with edge expansion and composite scoring. → [memory](docs/memory/pipeline.md)
-4. **Private mind** — opt-in, git-backed sync of your *whole* memory across *your own* machines. → [private mind](docs/minds/private-mind.md)
-5. **Team mind** — hand-pick memories to publish to a repo teammates subscribe to; their sessions learn from yours. → [team mind](docs/minds/team-mind.md)
-6. **Session-to-session coordination** — your sessions see each other and exchange messages, on one machine and across your fleet; a virtual team sharing one mind. → [coordination](docs/coordination/overview.md)
-7. **Personality profile** — an evidence-based, opt-in perception of how you work, surfaced to every session. → [profile](docs/memory/profile.md)
-8. **Code graph** — an AST symbol graph of your repos: blast-radius, branch-diff, and file-knowledge recall before you edit. → [codegraph](docs/codegraph/codegraph.md)
-
-The UI is for monitoring. **The actual intelligence runs through hooks** that
-fire during your normal Claude Code sessions — the UI doesn't have to be open
-for any of it to work.
-
-> **Why `ckn`?** The package, CLI (`ckn-*`), and env-var (`CKN_*`) prefix come
-> from this project's early-days name, **C**laude **K**nowledge **N**etwork.
-> It's since been rebranded **Cortex**, but the `ckn` prefix stuck.
+- Node.js 20.11 or later, and git. `npm ci` builds better-sqlite3, which ships prebuilt binaries for common platforms; elsewhere it needs Python 3, make and a C++ compiler.
+- Claude Code.
+- Linux, macOS or WSL. Services use systemd user units on Linux.
+- `jq`, for the status line.
+- Docker, only for the container simulations under `test/sim` and `examples/gateway-e2e`.
 
 ## Install
 
-The fastest path: open a Claude Code session and paste the auto-install prompt
-from **[docs/start/install.md](docs/start/install.md)** — Claude clones,
-installs, verifies, and seeds an onboarding corpus so it can drive the rest of
-setup from recall. The manual path is four commands:
+See [INSTALL.md](INSTALL.md). For one user on one machine:
 
 ```bash
-git clone git@github.com:cz-zwtech/cortex.git ~/cortex
-cd ~/cortex && npm install
-npm start                    # first boot registers hooks + commands + skills
-npm run install-aliases      # ckn-start / ckn-stop / ckn-bus / …
+git clone <repo url> ~/cortex && cd ~/cortex && npm ci
+npx tsx bin/cortex-install.ts
 ```
 
-Then restart your Claude Code session so the just-installed hooks load.
-Check [prerequisites](docs/start/prerequisites.md) first (Node 20+, build
-toolchain, git identity, SSH keys), and read
-[permissions & agent-driven setup](docs/start/permissions-and-agents.md) before
-asking a session to do the install for you.
+If another account on the machine already runs Cortex, the install asks for a shared checkout that every account can run (see INSTALL.md); add `--single-user` if yours is to be separate.
 
-## What Cortex touches on your system
+Moving from Cortex V1? Follow [docs/migrating-from-v1.md](docs/migrating-from-v1.md). It links to what changes and to the V1 purge checklist.
 
-Cortex is **per-user and additive** — everything lives under your home
-directory, no root, no system service unless you opt into
-[worker mode](docs/operate/worker-mode.md), and **no MCP servers registered**.
-Every install step is idempotent and marker-fenced: re-running refreshes
-Cortex's own block and never clobbers entries you added yourself.
+The node starts local-only. Connect it to your other machines with `cortex-mesh` when you want to.
+To connect, a node that dials needs TCP to the listening node's mesh port (3021 by default) over a private network: the mesh accepts connections from private addresses only. A machine that can only dial out (a laptop, WSL) adds the other as a peer; nothing needs to reach it.
 
-| Where | What |
-|---|---|
-| `~/.claude/settings.json` | 7 hook registrations, inside Cortex markers — Cortex never writes a `statusLine` key |
-| `~/.claude/commands/`, `~/.claude/skills/` | 11 slash commands + the `codegraph` skill |
-| your shell rc | one managed alias block — only when you run `npm run install-aliases` |
-| `~/.config/ckn/` | the graph DB, app config, machine id, optional mind clones |
-| `~/.local/state/ckn/` | server log |
+## Writing a module
 
-Full detail per group: [install](docs/start/install.md). Opt-in only:
-API-key extraction, private-mind sync, the mesh, worker mode — each documented
-in its own page.
+See [docs/module-author-guide.md](docs/module-author-guide.md), and `examples/hello-world` for a minimal module.
 
-## The map
+## Tests
 
-| Domain | Start at |
-|---|---|
-| Getting started | [docs/start/install.md](docs/start/install.md) |
-| Add a machine to your fleet (mesh) | [docs/install-wsl-driver-node.md](docs/install-wsl-driver-node.md) |
-| Day-to-day operation | [docs/operate/running.md](docs/operate/running.md) |
-| Memory | [docs/memory/pipeline.md](docs/memory/pipeline.md) |
-| Session coordination | [docs/coordination/overview.md](docs/coordination/overview.md) |
-| Your minds (private / team) | [docs/minds/private-mind.md](docs/minds/private-mind.md) |
-| Code graph | [docs/codegraph/codegraph.md](docs/codegraph/codegraph.md) |
-| The UI | [docs/ui.md](docs/ui.md) |
-| Statusline dots (bus / mesh, opt-in) | [docs/statusline-bus-dot.md](docs/statusline-bus-dot.md) |
-| Architecture (one page) | [docs/architecture.md](docs/architecture.md) |
-| Configuration reference | [docs/operate/configuration.md](docs/operate/configuration.md) |
-| Troubleshooting | [docs/operate/troubleshooting.md](docs/operate/troubleshooting.md) |
+```bash
+npm test                 # every suite, each in an isolated sandbox
+bash test/sim/<name>.sh  # container simulations of multi-node and multi-user setups
+```
 
-## Known pain points
-
-Cortex is pre-1.0 personal infrastructure: functional and daily-driven, with
-acknowledged rough edges rather than a roadmap. The ones you're most likely to
-hit:
-
-- Pattern detection is greedy — per-fail-id dedup, no semantic similarity, so
-  the pattern corpus accumulates noise.
-- The D3 graph view slows above ~500 nodes.
-- The team-mind model assumes mutual trust between collaborators (no commit
-  signing, no secret scrubbing on publish).
-- `remote` embeddings mode is a reserved value, not implemented — `local` and
-  `off` are the real choices.
-- Each page in `docs/` notes its own rough edges where you'll hit them.
-- A handful of `npm audit` advisories (2 critical / 3 high / 1 moderate) live in dev/build dependencies (`vite`/`esbuild`, `concurrently` → `shell-quote`) or an unused SDK code path — none are reachable from the running server, and the criticals have no patched upstream release yet. A deliberate major-version bump pass is tracked separately.
+Tests never touch your real Claude Code config or memory: under test, every path that would reach them is refused.
 
 ## License
 
-[MIT](LICENSE) © 2026 Corey Zwart.
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Copyright 2026 ZW-Tech LLC.

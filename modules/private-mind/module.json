@@ -1,0 +1,54 @@
+{
+  "name": "private-mind",
+  "version": "0.1.0",
+  "requiresCore": ">=2.0.0 <3.0.0",
+  "description": "One mind across home machines: knowledge syncs through a central node, working detail stays home as pointers, never through a gateway. Off until enabled per node.",
+  "runs": "host",
+  "provides": [
+    "private-mind.status",
+    "private-mind.config",
+    "private-mind.syncOnce"
+  ],
+  "subscribes": [
+    {
+      "event": "SessionStart",
+      "handler": "server/on-session-sync.ts",
+      "outsideHost": true
+    },
+    {
+      "event": "SessionEnd",
+      "handler": "server/on-session-sync.ts",
+      "outsideHost": true
+    },
+    {
+      "event": "UserPromptSubmit",
+      "handler": "server/on-session-sync.ts",
+      "outsideHost": true
+    }
+  ],
+  "cli": [
+    "bin/cortex-mind.ts"
+  ],
+  "requires": [
+    "memory",
+    "comms"
+  ],
+  "storage": {
+    "use": "self"
+  },
+  "meshKinds": {
+    "mind-state": {
+      "ephemeral": true,
+      "never": [
+        "gateway"
+      ]
+    }
+  },
+  "tests": [
+    "test/private-mind.test.ts",
+    "test/bundles.test.ts",
+    "test/service.test.ts",
+    "test/boundary.test.ts",
+    "test/oneshot.test.ts"
+  ]
+}

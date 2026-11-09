@@ -1,0 +1,201 @@
+{
+  "name": "memory",
+  "version": "0.1.0",
+  "requiresCore": ">=2.0.0 <3.0.0",
+  "description": "Persistent graph memory \u2014 record, recall, decay.",
+  "provides": [
+    "memory.record",
+    "memory.get",
+    "memory.search",
+    "memory.delete",
+    "memory.protect",
+    "memory.sweep",
+    "memory.standing",
+    "memory.rules",
+    "memory.versionVector",
+    "memory.journalStream",
+    "memory.journalAdopt",
+    "memory.classifier",
+    "memory.blockVector",
+    "memory.blockStream",
+    "memory.blockAdopt",
+    "memory.sessionInfo",
+    "memory.shapeOf",
+    "memory.verify"
+  ],
+  "optional": [
+    "comms"
+  ],
+  "storage": {
+    "use": "core",
+    "tables": [
+      "memories",
+      "hubs",
+      "declared_edges",
+      "observed_edges",
+      "derived_edges",
+      "consume_ledger",
+      "id_aliases",
+      "quarantine",
+      "quarantine_released",
+      "meta",
+      "rules",
+      "consolidation_runs",
+      "consolidation_ops",
+      "relation_checks",
+      "staleness",
+      "people",
+      "subject_index",
+      "constraint_lines"
+    ],
+    "views": []
+  },
+  "subscribes": [
+    {
+      "event": "PreToolUse",
+      "handler": "server/on-pre-tool-use.ts",
+      "order": 50
+    },
+    {
+      "event": "SessionEnd",
+      "handler": "server/on-session-end.ts",
+      "order": 10
+    },
+    {
+      "event": "SessionStart",
+      "handler": "server/on-session-start.ts",
+      "order": 10
+    },
+    {
+      "event": "UserPromptSubmit",
+      "handler": "server/on-user-prompt.ts",
+      "order": 20
+    },
+    {
+      "event": "PreToolUse",
+      "handler": "server/on-tool-audit.ts",
+      "order": 60
+    },
+    {
+      "event": "PreToolUse",
+      "handler": "server/on-pre-tool-constraints.ts",
+      "order": 55
+    },
+    {
+      "event": "PreToolUse",
+      "handler": "server/on-pre-tool-rules.ts",
+      "order": 52
+    },
+    {
+      "event": "UserPromptSubmit",
+      "handler": "server/on-prompt-target.ts",
+      "order": 25
+    },
+    {
+      "event": "Stop",
+      "handler": "server/on-stop-audit.ts",
+      "order": 50
+    },
+    {
+      "event": "Stop",
+      "handler": "server/on-stop-ask.ts",
+      "order": 45
+    },
+    {
+      "event": "Stop",
+      "handler": "server/on-stop-lesson.ts",
+      "order": 46
+    },
+    {
+      "event": "Stop",
+      "handler": "server/on-capture-stop.ts",
+      "order": 40
+    },
+    {
+      "event": "SessionStart",
+      "handler": "server/on-capture-start.ts",
+      "order": 15
+    },
+    {
+      "event": "SessionEnd",
+      "handler": "server/on-capture-end.ts",
+      "order": 15
+    },
+    {
+      "event": "PostToolUse",
+      "handler": "server/on-memory-write.ts",
+      "order": 20
+    }
+  ],
+  "routes": [],
+  "commands": [
+    {
+      "sub": "memory",
+      "file": "commands/memory.md",
+      "summary": "Search and read Cortex memory"
+    },
+    {
+      "sub": "rules",
+      "file": "commands/rules.md",
+      "summary": "Standing rules: list, show, check a draft, review"
+    }
+  ],
+  "tests": [
+    "test/outbound-rules.test.ts",
+    "test/rule-triggers.test.ts",
+    "test/engagement.test.ts",
+    "test/store.test.ts",
+    "test/events.test.ts",
+    "test/journal.test.ts",
+    "test/reconcile.test.ts",
+    "test/ingest.test.ts",
+    "test/consume.test.ts",
+    "test/no-content-in-records.test.ts",
+    "test/epoch.test.ts",
+    "test/collapse.test.ts",
+    "test/sweep.test.ts",
+    "test/embedding.test.ts",
+    "test/reflex.test.ts",
+    "test/calibrate.test.ts",
+    "test/rank.test.ts",
+    "test/expand.test.ts",
+    "test/recall.test.ts",
+    "test/drive.test.ts",
+    "test/sessionContext.test.ts",
+    "test/surfacing.test.ts",
+    "test/relevance.test.ts",
+    "test/session-hint.test.ts",
+    "test/frontmatter.test.ts",
+    "test/memoryIndex.test.ts",
+    "test/rules.test.ts",
+    "test/capture.test.ts",
+    "test/memory-write.test.ts",
+    "test/depth.test.ts",
+    "test/consolidate.test.ts",
+    "test/consolidate-stages.test.ts",
+    "test/sync-seams.test.ts"
+  ],
+  "claudeImports": [
+    "rules.md"
+  ],
+  "schedule": [
+    {
+      "name": "consolidate",
+      "everyHours": 24,
+      "command": [
+        "core:bin/cortex-memory.ts",
+        "consolidate",
+        "--scheduled"
+      ],
+      "idle": true,
+      "timeoutMinutes": 60
+    }
+  ],
+  "update": {
+    "after": "core:bin/cortex-memory.ts reindex --apply"
+  },
+  "statusline": {
+    "script": "statusline.sh",
+    "order": 10
+  }
+}
