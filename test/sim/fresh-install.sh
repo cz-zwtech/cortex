@@ -25,8 +25,11 @@ A() { docker exec $P runuser -l alex -c "cd ~/cortex; $1"; }
 T='node_modules/.bin/tsx'
 
 # Content sweep of the user's HOME (not the checkout, not npm's cache) for the private names and the
-# author's rule phrasings, read from the host checkout's .public-loose so the list never enters the tree.
-grep -v '^#' "$SRC/.public-loose" | grep . | docker exec -i $P sh -c 'cat > /tmp/sweep.patterns'
+# author's rule phrasings: the private .public-loose list, kept outside the repo (CORTEX_PUBLIC_LISTS),
+# so the list never enters the tree. Without it the sweep is skipped, and says so.
+LOOSE=${CORTEX_PUBLIC_LISTS:-$SRC}/.public-loose
+if [ -f "$LOOSE" ]; then grep -v '^#' "$LOOSE" | grep . | docker exec -i $P sh -c 'cat > /tmp/sweep.patterns'
+else echo "  (no .public-loose: set CORTEX_PUBLIC_LISTS for the content sweep)"; docker exec $P sh -c ': > /tmp/sweep.patterns'; fi
 sweep() {
   local what="nothing private or personal anywhere in HOME $1" hits
   [ -n "${2:-}" ] && { A "[ -s $2 ]" || { no "$what: $2 is empty"; return; }; what="$what, $2 included"; }
@@ -36,7 +39,7 @@ sweep() {
 
 echo "== a new user gets the public tree"
 Z 'useradd -m -s /bin/bash alex
-   mkdir -p /home/alex/cortex && cd /src && git -c safe.directory=* ls-files -co --exclude-standard | awk "NR==FNR { if (\$0 !~ /^#/ && NF) x[++n]=\$0; next } { for (i=1;i<=n;i++) if (index(\$0, x[i])==1) next; print }" .public-exclude - | tar -cf - -T - | tar -xf - -C /home/alex/cortex
+   mkdir -p /home/alex/cortex && cd /src && git -c safe.directory=* ls-files -co --exclude-standard | awk "NR==FNR { if (\$0 !~ /^#/ && NF) x[++n]=\$0; next } { for (i=1;i<=n;i++) if (index(\$0, x[i])==1) next; print }" $(test -f .public-exclude && echo .public-exclude || { echo "\#" > /tmp/no-exclude; echo /tmp/no-exclude; }) - | tar -cf - -T - | tar -xf - -C /home/alex/cortex
    cp -a /src/node_modules /home/alex/cortex/ && chown -R alex /home/alex/cortex
    runuser -l alex -c "mkdir -p ~/.claude && printf %s \"{\\\"theme\\\":\\\"dark\\\"}\" > ~/.claude/settings.json"'
 before=$(A 'node -e "console.log(JSON.stringify(require(process.env.HOME + \"/.claude/settings.json\")))"')

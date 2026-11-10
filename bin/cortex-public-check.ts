@@ -2,7 +2,7 @@
 /**
  * cortex-public-check: is this tree ready to export as the public one? (public gate G10)
  *
- *   cortex-public-check [--list] [--loose] [--repo <dir>] [--export <dir>]
+ *   cortex-public-check [--list] [--loose] [--repo <dir>] [--lists <dir>] [--export <dir>]
  *
  * Over the tracked files that would be exported (all but those under .public-exclude):
  *   names    every line matching .public-names, counted per file (--list prints them)
@@ -18,6 +18,9 @@
  * --loose (always on with --export) also prints every case-insensitive substring hit for the raw
  * names in .public-loose, for a person to read before a push. It never changes the verdict: the
  * patterns decide, the loose list catches what a pattern's boundaries might miss.
+ * The lists (.public-names, .public-loose, .public-exclude) name private things, so they are kept
+ * outside the public repo: --lists <dir> or CORTEX_PUBLIC_LISTS says where. Without them the
+ * names are not checked, and the output says so.
  * Tests and sims are run separately (npm test, test/sim/*.sh).
  */
 import { execSync } from 'node:child_process'
@@ -25,6 +28,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { scanForSecrets } from '../core/secrets.js'
+import { exitOnHelp } from '../core/help.js'
+
+exitOnHelp(`usage: cortex-public-check [--list] [--loose] [--repo <dir>] [--lists <dir>] [--export <dir>]
+  checks the exportable tracked files for private names, shipped memories and secrets; exits 1 on a finding.
+  --export <dir> copies them into a new or empty <dir>, only when the tree passes`)
 
 const arg = (name: string) => {
   const i = process.argv.indexOf(name)
@@ -36,8 +44,10 @@ if (exportTo && fs.existsSync(exportTo) && fs.readdirSync(exportTo).length) {
   console.log(`refused: ${exportTo} is not empty`)
   process.exit(2)
 }
+const listsDir = path.resolve(arg('--lists') ?? process.env.CORTEX_PUBLIC_LISTS ?? repo)
 const lines = (f: string) =>
-  fs.existsSync(path.join(repo, f)) ? fs.readFileSync(path.join(repo, f), 'utf-8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')) : []
+  fs.existsSync(path.join(listsDir, f)) ? fs.readFileSync(path.join(listsDir, f), 'utf-8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')) : []
+const hasNames = fs.existsSync(path.join(listsDir, '.public-names'))
 const exclude = lines('.public-exclude')
 const names = lines('.public-names').map((p) => new RegExp(p))
 const list = process.argv.includes('--list')
@@ -90,6 +100,7 @@ for (const f of files) {
   }
 }
 console.log(`files that would be exported: ${files.length} (excluded: ${exclude.join(', ')})`)
+if (!hasNames) console.log(`no name list in ${listsDir}: private names NOT checked (pass --lists <dir>)`)
 console.log(`names: ${nameHits} line(s) in ${byFile.length} file(s)${byFile.length ? '\n' + byFile.sort((a, b) => Number(b.trim().split(' ')[0]) - Number(a.trim().split(' ')[0])).slice(0, 40).join('\n') : ''}`)
 console.log(`memories: ${memories.length} file(s) outside tests carry a memory${memories.length ? '\n' + memories.map((m) => `  ${m}`).join('\n') : ''}`)
 console.log(`secrets outside tests: ${secretFails}; made-up tokens in tests: ${testSecrets.length} (shapes only, by --list)`)

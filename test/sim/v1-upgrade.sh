@@ -32,7 +32,7 @@ check "three V1 memory files are in place" A '[ "$(find ~/.claude/memory ~/.clau
 echo "== the V2 tree, with a decoy memory inside the checkout"
 # Prefix match on tracked paths, as .public-exclude says.
 Z 'mkdir -p /home/alex/cortex && cd /src
-   git -c safe.directory=* ls-files -co --exclude-standard | awk "NR==FNR { if (\$0 !~ /^#/ && NF) x[++n]=\$0; next } { for (i=1;i<=n;i++) if (index(\$0, x[i])==1) next; print }" .public-exclude - | tar -cf - -T - | tar -xf - -C /home/alex/cortex
+   git -c safe.directory=* ls-files -co --exclude-standard | awk "NR==FNR { if (\$0 !~ /^#/ && NF) x[++n]=\$0; next } { for (i=1;i<=n;i++) if (index(\$0, x[i])==1) next; print }" $(test -f .public-exclude && echo .public-exclude || { echo "\#" > /tmp/no-exclude; echo /tmp/no-exclude; }) - | tar -cf - -T - | tar -xf - -C /home/alex/cortex
    chown -R alex /home/alex/cortex'
 A 'mkdir -p docs memory
    printf -- "---\nname: decoy-should-not-ingest\ndescription: a decoy riding along in the checkout\ntype: project\n---\n\nThis decoy must never reach the store.\n" | tee docs/decoy-memory.md > memory/decoy.md'

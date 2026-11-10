@@ -79,3 +79,15 @@ test('a memory shipped outside tests fails the gate; generators and tests do not
   assert.match(r.stdout, /docs\/notes\/decided\.md/)
   assert.match(r.stdout, /core\/seed\.ts/)
 })
+
+test('--lists reads the name lists from a folder outside the repo, and says when there are none', () => {
+  const { '.public-names': _n, '.public-exclude': _e, 'secret-module/a.txt': _s, ...tree } = base
+  const repo = repoWith({ ...tree, 'docs/x.md': 'see privatename\n' })
+  const lists = tmp()
+  fs.writeFileSync(path.join(lists, '.public-names'), 'privatename\n')
+  const r = run('--repo', repo, '--lists', lists)
+  assert.equal(r.status, 1, r.stdout)
+  assert.match(r.stdout, /names: 1 line/)
+  const none = run('--repo', repo)
+  assert.match(none.stdout, /no name list/)
+})
