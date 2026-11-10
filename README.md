@@ -30,6 +30,8 @@ Cortex is a modular layer for Claude Code. A small core plugs into Claude Code's
 
 ## Modules
 
+Which do you need? On one machine, comms and memory. Add private-mind to carry what you learn between your own machines, gateway to reach another team's Cortex across domains, and telegram for operator notifications.
+
 | Module | Requires | Optional | Runs |
 | --- | --- | --- | --- |
 | comms | | | in sessions |
@@ -50,12 +52,12 @@ Run these from the checkout:
   ```
   A module of your own is a directory placed there; the install never overwrites one.
 - **List.** `/cortex-status` in a session, or `npx tsx bin/cortex-status.ts`: the modules started, the host-only ones, those not running with the reason, and a line from each module.
-- **Remove one.** Stop what it runs first: `cortex-mesh stop` for comms, and `systemctl --user disable --now` for `cortex-mesh.service` or `cortex-host.service` if you set them up. Then remove the link and sync, which removes its commands, its CLIs in `~/.local/bin` and its status line part:
+- **Remove one.** Stop what it runs first: `cortex-mesh stop` for comms, and `systemctl --user disable --now` for `cortex-mesh.service` or `cortex-host.service` if you set them up. Then remove the link (or `rm -r` a module directory you placed there yourself) and sync, which removes its commands, its CLIs in `~/.local/bin` and its status line part:
   ```bash
   rm ~/.config/ckn/modules/telegram
   npx tsx bin/cortex-setup.ts commands
   ```
-  Re-running the install, or an update that pulls changes, links every module in the checkout again; remove the link again after one.
+  Re-running the install, or an update that pulls changes, links every module in the checkout again; remove the link again after one. This is known: a removal the install remembers is planned.
 - **Its data stays.** A module's files stay under `~/.config/ckn/data/<module>` (comms keeps its log in `data/mesh`), and memory's tables stay in `~/.config/ckn/cortex.sqlite`. Memory is the only shipped module with tables there. To delete the data, back up first with `npx tsx bin/cortex-backup.ts now` (it saves your memory files, `cortex.sqlite` and `data/memory`, not other modules' data), then delete the directory.
 - **Dependencies.** An install is refused when a module it would install requires one that is neither installed nor being installed. A missing optional module only turns a feature off. Removing a module that another requires leaves the dependent installed but blocked, shown in status as `requires "comms", which is not installed`, until you add the dependency back.
 
