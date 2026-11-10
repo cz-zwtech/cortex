@@ -121,7 +121,7 @@ npx tsx bin/cortex-install.ts
 
 Path B (a new checkout; pick a folder that is not V1's):
 ```bash
-git clone <repo url> ~/cortex-v2 && cd ~/cortex-v2 && npm ci
+git clone https://github.com/cz-zwtech/cortex.git ~/cortex-v2 && cd ~/cortex-v2 && npm ci
 npx tsx bin/cortex-install.ts
 ```
 

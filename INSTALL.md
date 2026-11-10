@@ -16,7 +16,7 @@ checkout; your data (memories, the mesh log, comms) stays under your own `~/.con
 ## Single-user machine
 
 ```bash
-git clone <repo url> ~/cortex && cd ~/cortex && npm ci
+git clone https://github.com/cz-zwtech/cortex.git ~/cortex && cd ~/cortex && npm ci
 npx tsx bin/cortex-install.ts
 ```
 
@@ -33,7 +33,7 @@ Make the parent directory owned by a group those users share, setgid, with a def
 the group rwx. Then, as any user in that group:
 
 ```bash
-git clone <repo url> /srv/cortex/cortex
+git clone https://github.com/cz-zwtech/cortex.git /srv/cortex/cortex
 /srv/cortex/cortex/bin/cortex-deploy-update.sh --no-pull   # npm ci, then make it group-writable
 ```
 

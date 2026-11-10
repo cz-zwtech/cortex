@@ -5,7 +5,7 @@ Thanks for taking a look. Issues and pull requests are welcome.
 ## Getting set up
 
 ```bash
-git clone <repo url> cortex && cd cortex && npm ci
+git clone https://github.com/cz-zwtech/cortex.git cortex && cd cortex && npm ci
 npm run typecheck
 npm test                # every suite, each in an isolated sandbox
 ```
