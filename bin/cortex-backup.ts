@@ -9,6 +9,12 @@
 import path from 'node:path'
 
 import { backupMemory, listBackups, restoreBackup } from '../core/backup.js'
+import { exitOnHelp } from '../core/help.js'
+
+exitOnHelp(`usage: cortex-backup list | now [reason] | restore <file>
+  list            backups on this machine, newest last
+  now [reason]    take one now
+  restore <file>  put a backup's files back (backs up the current state first)`)
 
 const repo = path.resolve(import.meta.dirname, '..')
 const [cmd, arg] = process.argv.slice(2)

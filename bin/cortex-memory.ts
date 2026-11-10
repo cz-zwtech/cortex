@@ -31,8 +31,9 @@ import { machineId } from '../core/machineId.js'
 import { Storage } from '../core/storage.js'
 import { Lifecycle } from '../core/lifecycle.js'
 import { dataRoot, dbPath, modulesDir } from '../core/paths.js'
+import { exitOnHelp } from '../core/help.js'
 
-const USAGE = `cortex-memory — inspect and correct the memory graph
+const USAGE = `cortex-memory: inspect and correct the memory graph
 
   status                 corpus size, quarantine depth, warnings
   list [n]               most recent memories (default 10)
@@ -77,6 +78,8 @@ const USAGE = `cortex-memory — inspect and correct the memory graph
 
 Read-only unless the verb says otherwise. Every verb goes through the module's
 declared capabilities, so this is also the contract's only real consumer.`
+
+exitOnHelp(USAGE)
 
 const events = new EventBus()
 const storage = new Storage(dbPath())
@@ -190,7 +193,7 @@ switch (verb) {
     // THE SIGNALS ARE THE POINT OF RUNNING THIS BY HAND. "Why did this surface?"
     // is the question, and a list of results without the scoring answers it no
     // better than the injection did.
-    if (r.corpusEmpty) out.push('the graph is empty — nothing has been ingested')
+    if (r.corpusEmpty) out.push('the graph is empty: nothing has been ingested')
     for (const h of r.hits) {
       out.push(`${h.score.toFixed(3)}  ${h.memory.name}  (${h.memory.id})`)
       const s = h.signals

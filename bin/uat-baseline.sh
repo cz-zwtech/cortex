@@ -26,6 +26,11 @@
 
 set -eu
 
+case "${1:-}" in -h|--help)
+  echo "usage: uat-baseline.sh   capture settings.json (CLAUDE_CONFIG_DIR) once, before core is installed, into UAT_BASELINE_DIR (default ~/.uat-baseline)"
+  exit 0 ;;
+esac
+
 CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 BASELINE_DIR="${UAT_BASELINE_DIR:-$HOME/.uat-baseline}"
 SETTINGS="$CONFIG_DIR/settings.json"

@@ -25,6 +25,10 @@ import { readAudit, verifyAudit } from '../server/audit.js'
 import { readConfig, exposedToDomain } from '../server/config.js'
 import { certFile, pinOfCert } from '../server/keys.js'
 import { readGatewayStatus } from '../server/status.js'
+import { exitOnHelp } from '../../../core/help.js'
+
+exitOnHelp(`usage: cortex-gate status | key | check | paths [--all] | paths close <role> <domain>:<role> | audit [--tail N] [--verify]
+  read-only views of the domain gateway, run on the gateway node (see the header of this file)`)
 
 const dir = path.join(dataRoot(), 'gateway')
 const [cmd = 'status', ...rest] = process.argv.slice(2)

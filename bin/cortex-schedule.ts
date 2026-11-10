@@ -14,6 +14,12 @@ import path from 'node:path'
 
 import { claudeConfigDir, dataRoot, modulesDir, runScript, tsxBin } from '../core/paths.js'
 import { declaredJobs, isDue, isIdle, jobKey, readState, unitText, writeState, type JobSpec } from '../core/schedule.js'
+import { exitOnHelp } from '../core/help.js'
+
+exitOnHelp(`usage: cortex-schedule run-due [--except <transcript>] [--force] | status | install | unit
+  run-due   run every job that is due (and idle, where it asks to be)
+  status    each job: last run, outcome, duration, next due
+  install   the nightly systemd user timer; unit prints the units instead`)
 
 const REPO = path.resolve(import.meta.dirname, '..')
 const [verb, ...rest] = process.argv.slice(2)

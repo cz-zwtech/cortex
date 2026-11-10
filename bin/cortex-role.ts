@@ -51,6 +51,20 @@ import { cliPath } from '../modules/comms/server/session.js'
 import { isVerbose, setVerbose } from '../modules/comms/server/verbose.js'
 import { messageLine } from '../modules/comms/server/session.js'
 import { presence, resolve } from '../modules/comms/server/directory.js'
+import { exitOnHelp } from '../core/help.js'
+
+// send and reply carry message text: only the arguments before it can ask for help.
+exitOnHelp(
+  `usage: cortex-role <command>
+  whoami | who [words...] | who --mesh [--live] [--json] | list | show <role> | inbox [--all] | watch
+  join <role> [--create] [--as <name>] [--meta k=v,k=v] | leave <role> | move <from> <to> [--create] [--keep]
+  create <role> | delete <role> | set k=v [k=v ...]
+  send <to> <text...> [--notify] [--queue-anyway] [--body-file <path> | -] [--file <path>]...
+  reply <msg-id> <text...> [--body-file <path> | -] | close-return <domain>:<role>
+  claim <msg-id> | check <msg-id> | done <msg-id> | debug [on|off]
+  (see the header of bin/cortex-role.ts)`,
+  ['send', 'reply'].includes(process.argv[2] ?? '') ? process.argv.slice(2, 4) : process.argv.slice(2),
+)
 
 const args = process.argv.slice(2)
 const flag = (name: string) => {

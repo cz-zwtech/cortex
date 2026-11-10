@@ -44,6 +44,14 @@ import { unmetRequires } from '../core/resolve.js'
 import { checkInstallLocation, humanUsers } from '../core/installLocation.js'
 import { dataRoot, modulesDir, claudeConfigDir, meshDir, runScript, stateDir, underTest } from '../core/paths.js'
 import { ensureNodeId, hookedSettings, serviceOpts, SERVICE_MODULES } from '../core/serviceInstall.js'
+import { exitOnHelp } from '../core/help.js'
+
+const USAGE = `usage: cortex-install [install|uninstall] [--single-user] [--no-mesh-start]
+       [--service [--alias a] [--port n] [--peer host:port] [--role r] [--with m1,m2]]
+       [--gateway --domain d [--alias a] [--port n]]
+  install (the default) writes Cortex's hooks, commands and status line into the harness config
+  and links the shipped modules into the state dir; uninstall removes what carries the marker`
+exitOnHelp(USAGE)
 
 const repoRoot = path.resolve(import.meta.dirname, '..')
 
@@ -82,7 +90,7 @@ if (mode === 'uninstall') {
 }
 
 if (mode !== 'install') {
-  console.error(`usage: cortex-install [install|uninstall] [--single-user] [--service [--alias a] [--port n] [--peer host:port] [--role r] [--with m1,m2]] [--gateway --domain d [--alias a] [--port n]]`)
+  console.error(USAGE)
   process.exit(2)
 }
 

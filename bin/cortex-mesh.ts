@@ -35,6 +35,16 @@ import { gateFile } from '../modules/comms/server/mesh/files.js'
 import { addPeer, normalisePeer, readPeers, removePeer } from '../modules/comms/server/mesh/peers.js'
 import { effectiveNodeConfig, nodeConfigFile, readNodeConfig, writeNodeConfig } from '../modules/comms/server/mesh/nodeConfig.js'
 import { applyConnect, connects, listens, migrateConnect } from '../modules/comms/server/mesh/connect.js'
+import { exitOnHelp } from '../core/help.js'
+
+exitOnHelp(`usage: cortex-mesh <command>
+  start [--wait] | stop | pause | resume | status | serve
+  listen on|off               whether other nodes may dial in here (off by default)
+  peers [list] | peers add|remove <host:port>
+  config [alias|port|host <value>]
+  forget <node|alias> | leave | retire-kind <kind> [--origin a,b] [--apply]
+  id | unit | aliases install|remove
+  (see the header of bin/cortex-mesh.ts)`)
 
 const dir = meshDir()
 const repo = path.resolve(import.meta.dirname, '..')

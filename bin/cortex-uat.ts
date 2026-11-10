@@ -27,6 +27,12 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { exitOnHelp } from '../core/help.js'
+
+exitOnHelp(`usage: cortex-uat [--keep]
+  the baseline acceptance run: comms between sessions, role messages and claims, queued delivery,
+  role create and delete, memory write and recall, each in throwaway state dirs.
+  --keep keeps the temp dirs. CKN_SERVER_URL names the bus; CKN_COMMS_TRANSPORT=mesh uses the mesh`)
 
 const repo = path.resolve(import.meta.dirname, '..')
 const tsx = path.join(repo, 'node_modules', '.bin', 'tsx')

@@ -20,6 +20,12 @@ import path from 'node:path'
 import { dataRoot, stateDir, claudeConfigDir } from '../core/paths.js'
 import { apply, decline, detect } from '../core/statuslineSetup.js'
 import { check, readPrefs, update, writePrefs, type Mode } from '../core/update.js'
+import { exitOnHelp } from '../core/help.js'
+
+exitOnHelp(`usage: cortex-setup commands | statusline [status|apply|decline] | update [check|skip|mode off|ask|auto]
+  commands     re-sync this user's Cortex commands to the checkout
+  statusline   what the status line has; apply brings it onto the V2 segment; decline stops the offer
+  update       pull the latest, reinstall deps if needed, rerun install and migrations`)
 
 const repo = path.resolve(import.meta.dirname, '..')
 const dataDir = path.join(dataRoot(), 'setup')

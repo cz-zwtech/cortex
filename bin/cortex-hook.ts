@@ -32,6 +32,12 @@ import { claudeConfigDir, dataRoot, dbPath, modulesDir, stateDir } from '../core
 import { CANARY_TOOL_MARKER, livenessEnabled, mintNonce, nonceLine } from '../core/liveness.js'
 import { trace } from '../core/trace.js'
 import { updateInProgress } from '../core/updateLock.js'
+import { exitOnHelp } from '../core/help.js'
+
+// Claude Code never passes --help; a person might. Answer before reading stdin or loading a module.
+exitOnHelp(`usage: cortex-hook <event>
+  Claude Code runs this once per lifecycle event, with the event's JSON on stdin.
+  events: ${LIFECYCLE_EVENTS.join(', ')}`)
 
 /**
  * Leave headroom under the harness timeout so we can always report. Being

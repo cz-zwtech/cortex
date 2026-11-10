@@ -32,7 +32,12 @@
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs/promises'
+import { exitOnHelp } from '../core/help.js'
 import { runAll, formatReport } from '../core/testRunner.js'
+
+exitOnHelp(`usage: cortex-test
+  runs core's tests (test/*.test.ts) and every installed module's declared tests.
+  CKN_MODULES_DIR names the modules directory (default <state>/modules); a missing one is an error`)
 
 const repoRoot = path.resolve(import.meta.dirname, '..')
 

@@ -20,6 +20,10 @@ import { hookedSettings } from '../core/serviceInstall.js'
 import { traceEnabled, traceSummary } from '../core/trace.js'
 import { LIFECYCLE_EVENTS } from '../core/manifest.js'
 import { readPrefs } from '../core/update.js'
+import { exitOnHelp } from '../core/help.js'
+
+exitOnHelp(`usage: cortex-status
+  core's version, installed modules and what is missing. Read-only, no arguments`)
 
 // State, not install — see core/paths.ts.
 const modulesDir = resolveModulesDir()

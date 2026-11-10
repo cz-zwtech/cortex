@@ -33,6 +33,15 @@ import { describeRef, resolver, type SecretRef } from '../server/secrets.js'
 import { TelegramChannel } from '../server/channel.js'
 import { openDb } from '../server/db.js'
 import { importLegacyGateway } from '../server/importer.js'
+import { exitOnHelp } from '../../../core/help.js'
+
+exitOnHelp(`usage: cortex-telegram-admin <command>   (as the service account, on the service node)
+  init --bot <id> --username @name --token <ref> --operator <name> --chat <ref> [--publish <ref>] [--force] [--no-verify]
+  check
+  migrate --secrets-path P --username <bot>=@name [...] [--apply]
+  import <legacy.sqlite3> [--bot dev] [--operator name]
+  unit
+  a <ref> is bao:<path>#<KEY> or env:<NAME> (see the header of this file)`)
 
 const dir = path.join(dataRoot(), 'telegram')
 const [verb, src] = process.argv.slice(2)

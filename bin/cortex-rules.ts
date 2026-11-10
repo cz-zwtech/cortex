@@ -28,6 +28,12 @@ import { checkText, renderRulesMd, type Rule } from '../modules/memory/server/ru
 import { review, type Said } from '../modules/memory/server/ruleReview.js'
 import { ContextStore } from '../modules/memory/server/context/store.js'
 import { addOverride, parseDuration, readOverrides } from '../modules/memory/server/ruleOverrides.js'
+import { exitOnHelp } from '../core/help.js'
+
+exitOnHelp(`usage: cortex-rules <command>
+  list | show <name> | check <file|-> | render | review [--days N]
+  allow <rule> --once | --for <30m|2h|1d>   (terminal only)
+  overrides`)
 
 // The whole point of a deny is that the session cannot lift it: only a person at a terminal can.
 // Checked before any module loads, so the refusal never depends on what is installed.

@@ -15,6 +15,10 @@ import { Lifecycle } from '../core/lifecycle.js'
 import { dataRoot, dbPath, modulesDir, stateDir } from '../core/paths.js'
 import { RENAMED, SessionNames, TITLE_RE, type Renamed, type RenamedResult } from '../core/sessionNames.js'
 import { Storage } from '../core/storage.js'
+import { exitOnHelp } from '../core/help.js'
+
+exitOnHelp(`usage: cortex-rename <name> [extension args...] [--force]
+  names this session (run from inside Claude Code); modules may add arguments, such as comms' [role]`)
 
 const die = (msg: string, code = 1): never => {
   console.error(msg)

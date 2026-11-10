@@ -9,6 +9,10 @@
 # Each reads the status line JSON on stdin, like this script, so it can be
 # statusLine.command itself or be called from an existing script with the same stdin.
 
+case "${1:-}" in -h|--help)
+  echo "usage: cortex-statusline.sh < status-line-json   (Claude Code's statusLine.command; reads its JSON on stdin)"
+  exit 0 ;;
+esac
 input=$(cat)
 state=${CKN_STATE_DIR:-$HOME/.config/ckn}
 out='\033[2mcortex\033[0m'

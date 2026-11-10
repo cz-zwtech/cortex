@@ -9,6 +9,10 @@
 #
 # Usage, as any user in the checkout's group:  bin/cortex-deploy-update.sh [--no-pull]
 set -euo pipefail
+case "${1:-}" in -h|--help)
+  echo "usage: cortex-deploy-update.sh [--no-pull]   update this shared deploy checkout: pull, npm ci, group perms, re-sync commands"
+  exit 0 ;;
+esac
 cd "$(dirname "$0")/.."
 umask 002
 # git refuses a repository owned by another user (CVE-2022-24765), and in a

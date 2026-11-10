@@ -27,6 +27,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
+import { exitOnHelp } from '../../../core/help.js'
 
 const argv = process.argv.slice(2)
 const arg = (f: string) => (argv.includes(f) ? argv[argv.indexOf(f) + 1] : undefined)
@@ -37,6 +38,8 @@ const die = (m: string): never => {
 }
 
 const USAGE = 'usage: cortex-mind status [--json] [--all-held] | sync | remove | dry-run [--local-roles a,b] [--local-dirs /p,/q] [--json] [--all-held] | explain <machine:seq>'
+
+exitOnHelp(USAGE)
 
 /** Held records, by reason: id and slug only. */
 const heldLines = (held: { record: string; code: string; slug?: string | null }[]): string[] => {

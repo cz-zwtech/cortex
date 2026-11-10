@@ -30,6 +30,15 @@ import { Lifecycle } from '../../../core/lifecycle.js'
 import { dataRoot, dbPath, modulesDir } from '../../../core/paths.js'
 import { Storage } from '../../../core/storage.js'
 import { recordReceived, recordSent } from '../server/dialogue.js'
+import { exitOnHelp } from '../../../core/help.js'
+
+exitOnHelp(`usage: cortex-telegram <command>
+  health | show <item> | ack <item> --handled|--forward [--note <text>] | retry <item> | retry --outbound <id>
+  send [--topic T] [--component C] [--bot B] [--to OPERATOR] [--idempotency-key K] [--reply-to INBOUND] [--file F]
+       text from stdin or --file, never argv
+  replies [--id N] [--owner R] [--topic T] [--since ISO] [--bot B]
+  await [--topic T] [--owner R] [--since ISO] [--timeout S] [--interval S]
+  claim <inbound id> | digest [--mark-reviewed ID ...]`)
 
 const args = process.argv.slice(2)
 const flag = (name: string): string | undefined => {
