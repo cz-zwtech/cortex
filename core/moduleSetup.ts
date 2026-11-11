@@ -39,7 +39,13 @@ export const listModules = (repo: string): Result => {
     ok: true,
     lines: names.map((n) => {
       const m = have.get(n) ?? manifestAt(path.join(repo, 'modules', n))
-      const state = have.has(n) ? 'installed' : removed.includes(n) ? 'removed (by you; module add brings it back)' : 'not installed'
+      const state = have.has(n)
+        ? removed.includes(n)
+          ? 'installed (but recorded as removed: module add clears the record)'
+          : 'installed'
+        : removed.includes(n)
+          ? 'removed (by you; module add brings it back)'
+          : 'not installed'
       const extra = [m?.runs === 'host' ? 'host only' : '', m?.requires.length ? `requires ${m.requires.join(', ')}` : ''].filter(Boolean)
       return `${n.padEnd(14)} ${state}${extra.length ? `  (${extra.join('; ')})` : ''}`
     }),
@@ -51,9 +57,10 @@ export const removeModule = (repo: string, name: string): Result => {
   const stat = fs.lstatSync(link, { throwIfNoEntry: false })
   if (!stat) return { ok: false, lines: [`${name} is not installed`] }
   if (!stat.isSymbolicLink()) return { ok: false, lines: [`${link} is a directory you placed there, not a bundled module's link: remove it yourself (rm -r)`] }
-  const requiredBy = [...installed()].filter(([n, m]) => n !== name && m.requires.includes(name)).map(([n]) => n)
+  const have = installed()
+  const requiredBy = [...have].filter(([n, m]) => n !== name && m.requires.includes(name)).map(([n]) => n)
   if (requiredBy.length) return { ok: false, lines: [`refused: ${requiredBy.join(', ')} ${requiredBy.length > 1 ? 'require' : 'requires'} ${name}; remove ${requiredBy.length > 1 ? 'them' : 'it'} first`] }
-  const host = installed().get(name)?.runs === 'host'
+  const host = have.get(name)?.runs === 'host'
   fs.unlinkSync(link)
   setRemoved(name, true)
   const data = path.join(dataRoot(), name)
