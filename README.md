@@ -45,21 +45,12 @@ Host-only modules start in the long-running Cortex host (`cortex-host.service`, 
 Run these from the checkout:
 
 - **Install.** `npx tsx bin/cortex-install.ts` links every module in the checkout's `modules/` into `~/.config/ckn/modules/` and installs their commands. A user install has no flag to pick modules: `--with` applies only to `--service` installs (comms plus the modules named), and `--gateway` installs comms and gateway only. See [INSTALL.md](INSTALL.md).
-- **Add one.** Link it, then sync the commands:
-  ```bash
-  ln -s "$PWD/modules/telegram" ~/.config/ckn/modules/telegram
-  npx tsx bin/cortex-setup.ts commands
-  ```
-  A module of your own is a directory placed there; the install never overwrites one.
-- **List.** `/cortex-status` in a session, or `npx tsx bin/cortex-status.ts`: the modules started, the host-only ones, those not running with the reason, and a line from each module.
-- **Remove one.** Stop what it runs first: `cortex-mesh stop` for comms, and `systemctl --user disable --now` for `cortex-mesh.service` or `cortex-host.service` if you set them up. Then remove the link (or `rm -r` a module directory you placed there yourself) and sync, which removes its commands, its CLIs in `~/.local/bin` and its status line part:
-  ```bash
-  rm ~/.config/ckn/modules/telegram
-  npx tsx bin/cortex-setup.ts commands
-  ```
-  Re-running the install, or an update that pulls changes, links every module in the checkout again; remove the link again after one. This is known: a removal the install remembers is planned.
+- **See what you have.** `npx tsx bin/cortex-setup.ts module list` shows every module and its state (installed, removed by you, not installed); `/cortex-status` shows what is running.
+- **Remove one.** `npx tsx bin/cortex-setup.ts module remove telegram` takes it out, with its commands, CLIs and status line part, and installs and updates leave it out from then on. It refuses while another installed module requires it. A module that runs in the Cortex host stops when you restart `cortex-host.service`; for comms, stop the mesh daemon with `cortex-mesh stop`.
+- **Add one.** `npx tsx bin/cortex-setup.ts module add telegram` brings it in or back. It refuses while a module it requires is not installed.
+- **A module of your own** is a directory you place in `~/.config/ckn/modules/`; the install never overwrites it, and you remove it yourself (`rm -r`).
 - **Its data stays.** A module's files stay under `~/.config/ckn/data/<module>` (comms keeps its log in `data/mesh`), and memory's tables stay in `~/.config/ckn/cortex.sqlite`. Memory is the only shipped module with tables there. To delete the data, back up first with `npx tsx bin/cortex-backup.ts now` (it saves your memory files, `cortex.sqlite` and `data/memory`, not other modules' data), then delete the directory.
-- **Dependencies.** An install is refused when a module it would install requires one that is neither installed nor being installed. A missing optional module only turns a feature off. Removing a module that another requires leaves the dependent installed but blocked, shown in status as `requires "comms", which is not installed`, until you add the dependency back.
+- **Dependencies.** An install is refused when a module it would install requires one that is neither installed nor being installed. A missing optional module only turns a feature off. `module remove` refuses to take out a module another one requires; if a link is deleted by hand instead, the dependent stays installed but blocked, shown in status as `requires "comms", which is not installed`, until the dependency is back.
 
 ## Requirements
 

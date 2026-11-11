@@ -45,6 +45,7 @@ import { checkInstallLocation, humanUsers } from '../core/installLocation.js'
 import { dataRoot, modulesDir, claudeConfigDir, meshDir, runScript, stateDir, underTest } from '../core/paths.js'
 import { ensureNodeId, hookedSettings, serviceOpts, SERVICE_MODULES } from '../core/serviceInstall.js'
 import { exitOnHelp } from '../core/help.js'
+import { removedModules } from '../core/modulePrefs.js'
 
 const USAGE = `usage: cortex-install [install|uninstall] [--single-user] [--no-mesh-start]
        [--service [--alias a] [--port n] [--peer host:port] [--role r] [--with m1,m2]]
@@ -130,6 +131,12 @@ const installBundledModules = async (only?: string[]): Promise<string[]> => {
       .map((e) => e.name)
   } catch {
     return installed
+  }
+  // What the person took out stays out, unless --with names it.
+  if (!only) {
+    const removed = removedModules()
+    for (const n of names.filter((n) => removed.includes(n))) console.log(`  modules:     ${n} left out: you removed it (cortex-setup module add ${n} brings it back)`)
+    names = names.filter((n) => !removed.includes(n))
   }
 
   // A link into this checkout whose module is gone (mesh, merged into comms on 2 Nov) would load nothing: drop it.

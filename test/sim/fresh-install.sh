@@ -113,6 +113,11 @@ check "private mind: not configured, so it does nothing" A "$T modules/private-m
 check "telegram: no built-in bot, no secrets" A "[ ! -f ~/.config/ckn/data/telegram/telegram.json ] && ! grep -rqiE 'bot[0-9]{6,}:|api\.telegram\.org/bot[0-9]' modules/telegram/server"
 check "gateway: not configured" A "[ ! -f ~/.config/ckn/data/gateway/gateway.json ]"
 
+echo "== a removed module stays removed"
+check "module remove takes telegram out" A "$T bin/cortex-setup.ts module remove telegram && [ ! -e ~/.config/ckn/modules/telegram ] && [ ! -f ~/.claude/commands/cortex-telegram.md ]"
+check "the install leaves it out" A "$T bin/cortex-install.ts install --no-mesh-start >/dev/null 2>&1 && [ ! -e ~/.config/ckn/modules/telegram ]"
+check "module add brings it back" A "$T bin/cortex-setup.ts module add telegram && [ -L ~/.config/ckn/modules/telegram ] && [ -f ~/.claude/commands/cortex-telegram.md ]"
+
 echo "== uninstall"
 A "$T bin/cortex-install.ts uninstall >/dev/null 2>&1"
 after=$(A 'node -e "console.log(JSON.stringify(require(process.env.HOME + \"/.claude/settings.json\")))"')

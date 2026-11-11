@@ -3,6 +3,9 @@
  * cortex-setup: keep the harness surface current.
  *
  *   commands                re-sync this user's Cortex commands to the checkout
+ *   module list             every module and its state: installed, removed by you, not installed
+ *   module remove <name>    take one out, and keep it out through installs and updates
+ *   module add <name>       bring one in (or back)
  *   statusline [status]     what the status line has: empty, none or v2
  *   statusline apply        bring it onto the V2 segment, keeping the user's own
  *   statusline decline      do not offer again (for what it has now)
@@ -22,8 +25,9 @@ import { apply, decline, detect } from '../core/statuslineSetup.js'
 import { check, readPrefs, update, writePrefs, type Mode } from '../core/update.js'
 import { exitOnHelp } from '../core/help.js'
 
-exitOnHelp(`usage: cortex-setup commands | statusline [status|apply|decline] | update [check|skip|mode off|ask|auto]
+exitOnHelp(`usage: cortex-setup commands | module list|add <name>|remove <name> | statusline [status|apply|decline] | update [check|skip|mode off|ask|auto]
   commands     re-sync this user's Cortex commands to the checkout
+  module       list the modules; remove one (it stays out through installs and updates) or add one
   statusline   what the status line has; apply brings it onto the V2 segment; decline stops the offer
   update       pull the latest, reinstall deps if needed, rerun install and migrations`)
 
@@ -66,6 +70,19 @@ if (area === 'commands') {
   const r = await resyncCommands({ claudeDir, repoRoot: repo, modulesDir: modulesDir() }, !!hookedSettings(claudeDir))
   console.log(!r ? 'commands: none here (no Cortex hooks: a service account)' : r.installed.length ? `commands installed: ${r.installed.join(', ')}` : 'commands: up to date')
   if (r?.skipped.length) console.log(`commands not installed, the name is taken by a file that is not Cortex V2's: ${r.skipped.join(', ')}`)
+} else if (area === 'module') {
+  const { listModules, addModule, removeModule } = await import('../core/moduleSetup.js')
+  if (verb !== 'list' && (!['add', 'remove'].includes(verb ?? '') || !arg)) die('usage: module list | add <name> | remove <name>')
+  const r = verb === 'list' ? listModules(repo) : verb === 'add' ? addModule(repo, arg!) : removeModule(repo, arg!)
+  for (const l of r.lines) console.log(l)
+  if (!r.ok) process.exit(1)
+  if (verb !== 'list') {
+    // The module's commands, CLIs and status line part follow its link.
+    const { resyncCommands } = await import('../core/harness.js')
+    const { hookedSettings } = await import('../core/serviceInstall.js')
+    const { modulesDir } = await import('../core/paths.js')
+    await resyncCommands({ claudeDir, repoRoot: repo, modulesDir: modulesDir() }, !!hookedSettings(claudeDir))
+  }
 } else if (area === 'statusline') {
   const found = detect(readSettings() as { statusLine?: { command?: string } })
   if (!verb || verb === 'status') {
@@ -127,5 +144,5 @@ if (area === 'commands') {
     }
   } else die('usage: update [check|skip|mode off|ask|auto]')
 } else {
-  die('usage: cortex-setup commands | statusline [status|apply|decline] | update [check|skip|mode off|ask|auto]')
+  die('usage: cortex-setup commands | module list|add <name>|remove <name> | statusline [status|apply|decline] | update [check|skip|mode off|ask|auto]')
 }
