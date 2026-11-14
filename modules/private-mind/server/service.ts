@@ -33,7 +33,7 @@ export type Msg =
   | { t: 'mind.sync.push'; round: string; part: number; parts: number; commit?: string; base?: string }
   | { t: 'mind.sync.ack'; round: string; part: number; commit?: string }
 
-export type InboxItem = { id: string; from: string; body: string; node?: string; files?: { name: string; path?: string }[] }
+export type InboxItem = { id: string; from: string; body: string; node?: string; nodeId?: string; files?: { name: string; path?: string }[] }
 /** How often a one-shot looks at its mailbox while it waits for answers. */
 export const DRAIN_POLL_MS = 1_000
 /** How often a one-shot asks again when no home node with a mind is reachable yet. */
@@ -198,7 +198,8 @@ export class MindService {
     } catch {
       return
     }
-    const from = it.node
+    // The sender's id, not its alias: a rebuilt node shares its alias with the id it left behind.
+    const from = it.nodeId ?? it.node
     if (!from || from === this.o.self) return
     const lines = () => {
       const f = it.files?.[0]?.path

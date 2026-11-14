@@ -39,6 +39,8 @@ const bus = () => {
   const gossip = new Map<string, MindState_>()
   const reachable = new Set<string>()
   const sends: { from: string; to: string; homeOnly: boolean }[] = []
+  /** What comms labels a node with for people: its alias, when it has one. */
+  const aliases = new Map<string, string>()
   let n = 0
   let dropNextFile = false
   const store = tmp()
@@ -56,14 +58,14 @@ const bus = () => {
         fs.copyFileSync(f, copy)
         return { name: path.basename(f), path: copy }
       })
-      inboxes.set(node, [...(inboxes.get(node) ?? []), { id: `m${++n}`, from, body, node: self, ...(files.length ? { files } : {}) }])
+      inboxes.set(node, [...(inboxes.get(node) ?? []), { id: `m${++n}`, from, body, node: aliases.get(self) ?? self, nodeId: self, ...(files.length ? { files } : {}) }])
       return { ok: true }
     },
     inbox: async () => [...(inboxes.get(self) ?? [])],
     markSeen: (_m: string, ids: string[]) => inboxes.set(self, (inboxes.get(self) ?? []).filter((i) => !ids.includes(i.id))),
     mindNodes: () => [...reachable],
   })
-  return { inboxes, gossip, reachable, sends, port, dropFile: () => (dropNextFile = true) }
+  return { inboxes, gossip, reachable, sends, aliases, port, dropFile: () => (dropNextFile = true) }
 }
 type Bus = ReturnType<typeof bus>
 
@@ -143,6 +145,19 @@ test('a round pushes to central and pulls from it; a third node gets it all thro
   assert.equal(s.base, loadState(c.mindDir).commits[0]!.id, 'a is built on central\'s latest commit')
   assert.equal(s.degraded, false)
   assert.ok(b.sends.length > 0 && b.sends.every((x) => x.homeOnly), 'every send home-only')
+})
+
+test('a rebuilt node that shares its alias with the id it left behind still gets central\'s answer', async () => {
+  const b = bus()
+  const rebuilt = node('box-a1b2c3', b)
+  const c = node('node-b', b)
+  // comms labels the sender by alias for people; the old id with the same alias is still known.
+  b.aliases.set('box-a1b2c3', 'box')
+  c.write('from-central')
+  await rebuilt.svc.round()
+  await settle(b, [rebuilt, c])
+  assert.deepEqual(rebuilt.names(), ['from-central'], 'the answer went to the node id, not the alias')
+  assert.ok(!b.sends.some((x) => x.to.startsWith('box:')), 'nothing was addressed to the alias')
 })
 
 test('central away: sync from the peer built on the newest central commit, marked degraded; central back: reconcile and clear', async () => {

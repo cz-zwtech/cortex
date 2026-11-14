@@ -23,6 +23,7 @@ test('a message routed to another node lands in its role mailbox, labelled with 
   })
   assert.equal(items[0]!.from, 'laptop:pm/pm-1')
   assert.equal(items[0]!.node, 'laptop')
+  assert.equal(items[0]!.nodeId, 'lap-node', 'the id too, for a reply that must reach this node and no other')
   assert.equal(items[0]!.body, 'build the brief')
   await until('DELIVERED at the origin', () => outbox(lap)[0]?.delivered_at != null)
   assert.equal(outbox(lap)[0]!.read_at, null, 'not read yet, so the origin still holds it')

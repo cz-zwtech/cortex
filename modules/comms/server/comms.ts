@@ -57,8 +57,10 @@ export type InboxItem = {
   ownership?: Ownership
   /** Where it arrived: a role mailbox, or this member's own. */
   via: string
-  /** Set when it came from another node: that node's alias, or its id. */
+  /** Set when it came from another node: that node's alias, or its id. For people to read. */
   node?: string
+  /** Set when it came from another node: its id, which stays unique when aliases do not. For replies. */
+  nodeId?: string
   /** Files that came with it, where they are on this node. */
   files?: Envelope['files']
   awaits?: Envelope['awaits']
@@ -101,9 +103,12 @@ export class Comms {
     this.mesh = opts.mesh
   }
 
-  /** A node's alias if it has one, else its id. */
+  /** A node's alias if it has one that no other node shares, else its id. */
   private label(view: MeshView | undefined, node: string): string {
-    return view?.nodes.find((n) => n.node === node)?.alias ?? node
+    const alias = view?.nodes.find((n) => n.node === node)?.alias
+    if (!alias) return node
+    const shared = view!.nodes.some((n) => n.node !== node && n.alias === alias) || view!.self.alias === alias
+    return shared ? node : alias
   }
 
   // ── reading ───────────────────────────────────────────────────────────────
@@ -536,7 +541,7 @@ export class Comms {
           id: p.id, from: this.fromLabel(view, p), to: p.to ?? role, body: p.body ?? '', stamp: p.stamp,
           notify: !!p.notify, via: role,
           ...(p.notify ? {} : { ownership: ownership(p.id, mailbox) }),
-          ...(p.remote ? { node: this.label(view, p.remote.node) } : {}),
+          ...(p.remote ? { node: this.label(view, p.remote.node), nodeId: p.remote.node } : {}),
           ...(p.files?.length ? { files: p.files } : {}),
           ...(p.awaits ? { awaits: p.awaits } : {}),
           ...(p.foreign ? { foreign: { domain: p.foreign.domain, kind: p.foreign.kind } } : {}),
@@ -547,7 +552,7 @@ export class Comms {
       if (p.type !== 'msg' || seen.has(p.id) || !wanted(p)) continue
       items.push({
         id: p.id, from: this.fromLabel(view, p), to: p.to ?? member, body: p.body ?? '', stamp: p.stamp, notify: false, via: member,
-        ...(p.remote ? { node: this.label(view, p.remote.node) } : {}),
+        ...(p.remote ? { node: this.label(view, p.remote.node), nodeId: p.remote.node } : {}),
         ...(p.files?.length ? { files: p.files } : {}),
         ...(p.awaits ? { awaits: p.awaits } : {}),
         ...(p.foreign ? { foreign: { domain: p.foreign.domain, kind: p.foreign.kind } } : {}),
