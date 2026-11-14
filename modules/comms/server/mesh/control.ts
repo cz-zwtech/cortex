@@ -3,8 +3,8 @@
  *
  * start is idempotent: a live pid with a fresh status file means running.
  * stop releases everything: the daemon process, its port and its handles,
- * plus the systemd user unit if one runs it, so a machine with no sessions
- * open (a desktop used for gaming) has no Cortex process left.
+ * plus the systemd user unit when the unit runs that daemon, so a machine
+ * with no sessions open (a desktop used for gaming) has no Cortex process left.
  */
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -71,9 +71,27 @@ export const start = async (dir: string, opts: { wait?: boolean } = {}): Promise
 export const systemdUnitActive = (): boolean =>
   spawnSync('systemctl', ['--user', 'is-active', '--quiet', UNIT]).status === 0
 
+/**
+ * Whether the systemd unit runs this process: its cgroup names the unit. Off Linux, or with no
+ * such process, never.
+ */
+export const ownedByUnit = (pid: number, readCgroup = (p: number) => fs.readFileSync(`/proc/${p}/cgroup`, 'utf-8')): boolean => {
+  try {
+    return readCgroup(pid).split('\n').some((line) => line.endsWith(`/${UNIT}`))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Stop the daemon of this dir. When the systemd unit runs it, stop the unit, or systemd would count
+ * the exit as the unit's. Only then: a daemon in some other dir (a test's, a second checkout's) on a
+ * machine whose unit runs the live one must never stop the live one.
+ */
 export const stop = async (dir: string): Promise<'stopped' | 'not-running'> => {
   let did = false
-  if (systemdUnitActive()) {
+  const unitPid = runningPid(dir)
+  if (unitPid && ownedByUnit(unitPid) && systemdUnitActive()) {
     spawnSync('systemctl', ['--user', 'stop', UNIT])
     did = true
   }

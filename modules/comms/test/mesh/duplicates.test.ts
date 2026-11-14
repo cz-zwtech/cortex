@@ -7,12 +7,21 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
+import { ownedByUnit } from '../../server/mesh/control.js'
 import { ownAddresses, pickDials } from '../../server/mesh/daemon.js'
 import { duplicateVerdict } from '../../server/mesh/routing.js'
 import { NodeTable } from '../../server/mesh/nodes.js'
 import { node, readyLinks, until } from './harness.js'
 
 const ipv4 = (address: string, internal = false) => ({ address, netmask: '255.255.255.0', family: 'IPv4' as const, mac: '00:00:00:00:00:00', internal, cidr: `${address}/24` })
+
+test('stop touches the systemd unit only for the daemon the unit runs', () => {
+  const unit = '0::/user.slice/user-1000.slice/user@1000.service/app.slice/cortex-mesh.service\n'
+  const shell = '0::/user.slice/user-1000.slice/session-3.scope\n'
+  assert.equal(ownedByUnit(1, () => unit), true)
+  assert.equal(ownedByUnit(1, () => shell), false, 'a test run or a hand-started daemon is not the unit')
+  assert.equal(ownedByUnit(1, () => { throw new Error('no /proc') }), false)
+})
 
 test('a machine does not advertise its container and VM bridges', () => {
   const addrs = ownAddresses(3021, {
@@ -55,6 +64,27 @@ test('links dialed from both ends: both ends keep the one dialed by the lower id
   assert.equal(duplicateVerdict('b', 'a', false, true), 'close-old', 'from b: the new one called in from a')
   assert.equal(duplicateVerdict('a', 'b', false, true), 'close-new')
   assert.equal(duplicateVerdict('b', 'a', true, false), 'close-new')
+})
+
+test('a node that called in again under a new instance restarted: its old link goes', () => {
+  assert.equal(duplicateVerdict('hub', 'box', false, false, { new: 'i2', old: 'i1' }), 'close-old')
+  assert.equal(duplicateVerdict('hub', 'box', false, false, { new: 'i1', old: 'i1' }), 'wait', 'one instance: its own end decides')
+  assert.equal(duplicateVerdict('hub', 'box', false, false, { new: 'i2' }), 'wait', 'an older peer sends no instance')
+  assert.equal(duplicateVerdict('box', 'hub', true, true, { new: 'i1', old: 'i1' }), 'close-new', 'the dialer itself')
+})
+
+test('a restarted dialer whose old link still looks live: the acceptor drops the old one', async () => {
+  const hub = await node('hub')
+  const box1 = await node('box', { peers: [hub.url], addresses: [] })
+  await until('linked', () => readyLinks(hub).some((l) => l.node === 'box'))
+  const old = readyLinks(hub).find((l) => l.node === 'box')!
+  // A second instance under the same id while the first one's link stands, as after a restart the
+  // acceptor has not noticed yet.
+  const box2 = await node('box', { peers: [hub.url], addresses: [] })
+  await until('the old link is closed', () => !old.live)
+  await box1.close()
+  void box2
+  await steady(hub, 'box')
 })
 
 const dials = (o: Partial<Parameters<typeof pickDials>[0]> = {}) =>

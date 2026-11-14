@@ -81,10 +81,22 @@ export type DuplicateVerdict = 'close-new' | 'close-old' | 'wait'
  * A second live link to a node this end already holds a link to. Dialed from both ends: keep the
  * one dialed by the lower node id. Both dialed by one end: that end keeps its older link and closes
  * the newer, and the other end waits for the close. Each end sees hellos in its own order, so if
- * both judged a one-sided pair, each could close a different link and the pair would churn.
+ * both judged a one-sided pair, each could close a different link and the pair would churn. The
+ * one exception: both called in from the other node but under different instances, so it has
+ * restarted, and the older link is left over from before it (it may look live until the heartbeat
+ * gives up on it, and nothing on the other side will ever close it).
  */
-export const duplicateVerdict = (self: string, peer: string, newIsOut: boolean, oldIsOut: boolean): DuplicateVerdict => {
+export const duplicateVerdict = (
+  self: string,
+  peer: string,
+  newIsOut: boolean,
+  oldIsOut: boolean,
+  instances: { new?: string; old?: string } = {},
+): DuplicateVerdict => {
   const dialer = (out: boolean) => (out ? self : peer)
-  if (newIsOut === oldIsOut) return dialer(newIsOut) === self ? 'close-new' : 'wait'
+  if (newIsOut === oldIsOut) {
+    if (dialer(newIsOut) === self) return 'close-new'
+    return instances.new && instances.old && instances.new !== instances.old ? 'close-old' : 'wait'
+  }
   return dialer(newIsOut) === [self, peer].sort()[0] ? 'close-old' : 'close-new'
 }

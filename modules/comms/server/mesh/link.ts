@@ -19,7 +19,8 @@ import { isRecord, sendableTo, type MeshLog, type MeshRecord } from './log.js'
 import { isValidated, type Intent } from './nodes.js'
 import { isRouteFrame, type RouteFrame } from './router.js'
 
-export type Hello = { node: string; addresses: string[]; intent: Intent; roles: string[] }
+/** `instance` is minted at each daemon start: a second link from one node under a new instance is that node after a restart. */
+export type Hello = { node: string; addresses: string[]; intent: Intent; roles: string[]; instance?: string }
 type Frame =
   | ({ t: 'hello'; v: 1 } & Hello)
   | { t: 'have'; origins: { origin: string; maxSeq: number }[] }
@@ -138,8 +139,8 @@ export class Link {
     }
     if (f.t === 'hello') {
       if (!isHello(f)) return this.close(4002, 'bad hello')
-      const { node, addresses, intent, roles } = f as unknown as Hello
-      this.peer = { node, addresses, intent, roles }
+      const { node, addresses, intent, roles, instance } = f as unknown as Hello
+      this.peer = { node, addresses, intent, roles, ...(typeof instance === 'string' && instance ? { instance } : {}) }
       this.ev.onHello(this)
       if (this.#closed) return
       this.#maybeHave()

@@ -26,6 +26,7 @@
  * Link state goes to status.json, which the status line and `cortex-mesh
  * status` read, so neither needs to call the daemon.
  */
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
@@ -33,7 +34,7 @@ import path from 'node:path'
 import WebSocket, { WebSocketServer } from 'ws'
 
 import { Link, type Hello } from './link.js'
-import { MeshLog } from './log.js'
+import { MeshLog, type MeshRecord } from './log.js'
 import { isPrivateAddress } from './net.js'
 import { isValidated, NodeTable, type AnnouncedRole, type Announcement, type Intent, type Source } from './nodes.js'
 import { readPeers } from './peers.js'
@@ -205,7 +206,13 @@ export const serve = async (
   // Bound to loopback (a service node), nothing elsewhere can dial it: it dials out, and advertises nothing.
   const loopback = host === '127.0.0.1' || host === '::1' || host === 'localhost'
   const listening = opts.listen !== false
-  let me: Hello = { node, addresses: opts.addresses ?? (loopback || !listening ? [] : ownAddresses(port)), intent, roles: announcedRoles.map((r) => r.role) }
+  let me: Hello = {
+    node,
+    addresses: opts.addresses ?? (loopback || !listening ? [] : ownAddresses(port)),
+    intent,
+    roles: announcedRoles.map((r) => r.role),
+    instance: crypto.randomBytes(6).toString('hex'),
+  }
   const ownAddr = new Set(me.addresses)
   const links = new Set<Link>()
   let stopped = false
@@ -240,7 +247,10 @@ export const serve = async (
     flushAll()
   }
   const takeAnnouncements = () => {
-    for (const r of log.read(ANNOUNCE_ADDRESS)) {
+    // Only each node's latest: one relayed late must not replace a newer address list.
+    const latest = new Map<string, MeshRecord>()
+    for (const r of log.read(ANNOUNCE_ADDRESS)) if (r.seq > (latest.get(r.origin)?.seq ?? 0)) latest.set(r.origin, r)
+    for (const r of latest.values()) {
       if (r.origin === node) continue
       try {
         const a = JSON.parse(r.payload) as Announcement
@@ -272,7 +282,10 @@ export const serve = async (
       // One link per pair (routing.ts duplicateVerdict says which goes).
       for (const other of links) {
         if (other === link || other.node !== peer.node || !other.live) continue
-        const verdict = duplicateVerdict(node, peer.node, link.direction === 'out', other.direction === 'out')
+        const verdict = duplicateVerdict(node, peer.node, link.direction === 'out', other.direction === 'out', {
+          new: peer.instance,
+          old: other.peer?.instance,
+        })
         if (verdict === 'wait') continue
         ;(verdict === 'close-old' ? other : link).close(4000, 'duplicate')
         if (verdict === 'close-new') return

@@ -81,7 +81,8 @@
     "test/mesh/nodeConfig.test.ts",
     "test/mesh/live.test.ts",
     "test/mesh/seams.test.ts",
-    "test/mesh/connect.test.ts"
+    "test/mesh/connect.test.ts",
+    "test/mesh/duplicates.test.ts"
   ],
   "extends": [
     {
