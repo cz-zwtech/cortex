@@ -38,7 +38,7 @@ import { isPrivateAddress } from './net.js'
 import { isValidated, NodeTable, type AnnouncedRole, type Announcement, type Intent, type Source } from './nodes.js'
 import { readPeers } from './peers.js'
 import { Router, type Accept, type DeliverFiles, type OutboxRow, type RouteFrame } from './router.js'
-import { announceable, computeRoutes, isDrop, type Route } from './routing.js'
+import { announceable, computeRoutes, duplicateVerdict, isDrop, type Route } from './routing.js'
 import { isExpired, limitFor, OFFLINE_ADDRESS, readOfflinePolicy, type OfflineNotice, type OfflinePolicy } from './offline.js'
 
 export const DEFAULT_PORT = 3021
@@ -107,12 +107,55 @@ const writeStatus = (dir: string, s: Status) => {
   fs.renameSync(tmp, statusFile(dir))
 }
 
-/** This machine's reachable addresses: every private IPv4 it has, at the mesh port. */
-export const ownAddresses = (port: number): string[] =>
-  Object.values(os.networkInterfaces())
-    .flat()
-    .filter((i): i is os.NetworkInterfaceInfo => !!i && i.family === 'IPv4' && !i.internal && isPrivateAddress(i.address))
+/**
+ * This machine's own container and VM bridges. Their addresses reach it only from inside its own
+ * containers, which reach its LAN address through NAT anyway; advertised, they let a container open
+ * one link per bridge to the same node.
+ */
+export const BRIDGE_INTERFACE = /^(docker\d*|br-|veth|incusbr|lxdbr|virbr|cni|flannel|cali|vxlan)/
+
+/** This machine's reachable addresses: every private IPv4 it has, at the mesh port, bridges left out. */
+export const ownAddresses = (port: number, interfaces = os.networkInterfaces()): string[] =>
+  Object.entries(interfaces)
+    .filter(([name]) => !BRIDGE_INTERFACE.test(name))
+    .flatMap(([, list]) => list ?? [])
+    .filter((i) => i.family === 'IPv4' && !i.internal && isPrivateAddress(i.address))
     .map((i) => `http://${i.address}:${port}`)
+
+/**
+ * What to dial now: every configured address, and one known address at a time of every other
+ * validated node, that has no live link. Unreachable ones (behind NAT, or in a VLAN we cannot
+ * enter) fail and back off, and the next address gets its turn; the other side dials us instead.
+ * All at once, a node reachable at several addresses came back as several links. A node whose
+ * configured address is being dialed, or is due, gets no gossiped dial beside it.
+ */
+export const pickDials = (o: {
+  self: string
+  peers: string[]
+  configuredAs: (url: string) => string | undefined
+  known: { node: string; addresses: string[]; validated: boolean }[]
+  linked: ReadonlySet<string>
+  dialing: ReadonlySet<string>
+  waiting: (url: string) => boolean
+  own: ReadonlySet<string>
+}): string[] => {
+  const out: string[] = []
+  const covered = new Set<string>()
+  for (const url of o.peers) {
+    const known = o.configuredAs(url)
+    if (known && o.linked.has(known)) continue
+    out.push(url)
+    if (known && (o.dialing.has(url) || !o.waiting(url))) covered.add(known)
+  }
+  for (const n of o.known) {
+    if (n.node === o.self || o.linked.has(n.node) || covered.has(n.node) || !n.validated) continue
+    const candidates = n.addresses.filter((a) => !o.own.has(a))
+    if (candidates.some((a) => o.dialing.has(a))) continue
+    const next = candidates.find((a) => !o.waiting(a))
+    if (next) out.push(next)
+  }
+  return [...new Set(out)].filter((a) => !o.own.has(a))
+}
 
 export const wsUrl = (url: string) => `${url.replace(/^http/, 'ws')}/mesh`
 
@@ -226,13 +269,13 @@ export const serve = async (
       // gossip is gossiped, and one that called in is accepted.
       const configured = link.direction === 'out' && !!link.url && readPeers(dir).includes(link.url)
       nodes.seen(peer, configured ? 'configured' : link.direction === 'out' ? 'gossiped' : 'accepted', configured ? link.url : undefined)
-      // One link per pair: keep the one dialed by the lower node id.
+      // One link per pair (routing.ts duplicateVerdict says which goes).
       for (const other of links) {
         if (other === link || other.node !== peer.node || !other.live) continue
-        const dialer = (l: Link) => (l.direction === 'out' ? node : peer.node)
-        const keepNew = dialer(link) === [node, peer.node].sort()[0]
-        ;(keepNew ? other : link).close(4000, 'duplicate')
-        if (!keepNew) return
+        const verdict = duplicateVerdict(node, peer.node, link.direction === 'out', other.direction === 'out')
+        if (verdict === 'wait') continue
+        ;(verdict === 'close-old' ? other : link).close(4000, 'duplicate')
+        if (verdict === 'close-new') return
       }
     },
     onRecords: (link: Link, adopted: number) => {
@@ -297,28 +340,27 @@ export const serve = async (
       server.listen(port, host, ok)
     })
 
-  // Dial every configured address, and every known address of every other
-  // validated node, that has no live link. Unreachable ones (behind NAT, or in
-  // a VLAN we cannot enter) fail and back off; the other side dials us instead.
   const backoff = new Map<string, { next: number; wait: number }>()
   const dialErrors = new Map<string, string>()
   const dialing = new Set<string>()
   const configuredUrls = new Set<string>()
   const dialTargets = (): string[] => {
-    const linked = new Set([...links].filter((l) => l.live && l.node).map((l) => l.node!))
-    const out: string[] = []
+    const peers = readPeers(dir)
     configuredUrls.clear()
-    for (const url of readPeers(dir)) {
-      configuredUrls.add(url)
-      const known = nodes.byConfigured(url)
-      if (known && linked.has(known.node)) continue
-      out.push(url)
-    }
-    for (const n of nodes.list()) {
-      if (n.node === node || linked.has(n.node) || !n.validated) continue
-      out.push(...n.addresses)
-    }
-    return [...new Set(out)].filter((a) => !ownAddr.has(a))
+    for (const url of peers) configuredUrls.add(url)
+    return pickDials({
+      self: node,
+      peers,
+      configuredAs: (url) => nodes.byConfigured(url)?.node,
+      known: nodes.list(),
+      linked: new Set([...links].filter((l) => l.live && l.node).map((l) => l.node!)),
+      dialing,
+      waiting: (a) => {
+        const b = backoff.get(a)
+        return !!b && Date.now() < b.next
+      },
+      own: ownAddr,
+    })
   }
   const dial = (url: string) => {
     const b = backoff.get(url)

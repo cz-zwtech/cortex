@@ -133,7 +133,7 @@ test('when both sides dial, one link survives: the one dialed by the lower node 
   assert.equal(a.daemon.links().filter((l) => l.live)[0]!.direction, 'out', 'node-a < node-b, so a\'s outbound link is kept')
 })
 
-test('a node that moves to a new address is still the same node', async () => {
+test('a node that moves to a new address is still the same node, at only its new address', async () => {
   const a = await node('node-a')
   const bDir = tmp()
   const b1 = await node('node-b', { dir: bDir, peers: [a.url] })
@@ -144,7 +144,7 @@ test('a node that moves to a new address is still the same node', async () => {
   await until('the new address is recorded', () => !!new NodeTable(a.log.db).get('node-b')?.addresses.includes(b2.url))
   const rows = new NodeTable(a.log.db).list().filter((n) => n.node === 'node-b')
   assert.equal(rows.length, 1)
-  assert.ok(rows[0]!.addresses.includes(b1.url) && rows[0]!.addresses.includes(b2.url), JSON.stringify(rows[0]))
+  assert.deepEqual(rows[0]!.addresses, [b2.url], 'the address it left is not dialed again')
   assert.equal(rows[0]!.firstSeen, first.firstSeen)
 })
 

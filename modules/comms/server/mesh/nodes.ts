@@ -135,14 +135,16 @@ export class NodeTable {
   }
 
   /**
-   * Record a handshake. A known node at a new address stays the same row: its
-   * addresses grow, and its source only ever strengthens.
+   * Record a handshake. A known node at a new address stays the same row, and
+   * its source only ever strengthens. Its addresses are what it says now: a
+   * list that only grew kept dead addresses dialable for good (an address
+   * dropped from CKN_MESH_ADVERTISE, a bridge it no longer has).
    */
   seen(h: { node: string; addresses: string[]; intent: Intent; roles: string[] }, source: Source, configuredUrl?: string, now = Date.now()): NodeRow {
     const prev = this.get(h.node)
     const row: NodeRow = {
       node: h.node,
-      addresses: union(h.addresses, prev?.addresses ?? []),
+      addresses: h.addresses,
       configured: configuredUrl ? union([configuredUrl], prev?.configured ?? []) : (prev?.configured ?? []),
       source: prev && RANK[prev.source] > RANK[source] ? prev.source : source,
       intent: h.intent,
@@ -180,7 +182,7 @@ export class NodeTable {
       )
       .run(
         a.node,
-        JSON.stringify(union(a.addresses, prev?.addresses ?? [])),
+        JSON.stringify(a.addresses),
         a.intent,
         JSON.stringify(roles),
         prev?.firstSeen ?? now,

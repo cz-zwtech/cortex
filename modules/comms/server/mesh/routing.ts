@@ -74,3 +74,17 @@ export const announceable = (drops: number[], openedAt: number, now: number): bo
  * tie-break closes is not a drop; losing the node is.
  */
 export const isDrop = (peerValidated: boolean, stillLinked: boolean): boolean => peerValidated && !stillLinked
+
+export type DuplicateVerdict = 'close-new' | 'close-old' | 'wait'
+
+/**
+ * A second live link to a node this end already holds a link to. Dialed from both ends: keep the
+ * one dialed by the lower node id. Both dialed by one end: that end keeps its older link and closes
+ * the newer, and the other end waits for the close. Each end sees hellos in its own order, so if
+ * both judged a one-sided pair, each could close a different link and the pair would churn.
+ */
+export const duplicateVerdict = (self: string, peer: string, newIsOut: boolean, oldIsOut: boolean): DuplicateVerdict => {
+  const dialer = (out: boolean) => (out ? self : peer)
+  if (newIsOut === oldIsOut) return dialer(newIsOut) === self ? 'close-new' : 'wait'
+  return dialer(newIsOut) === [self, peer].sort()[0] ? 'close-old' : 'close-new'
+}
