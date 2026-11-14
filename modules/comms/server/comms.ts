@@ -542,7 +542,9 @@ export class Comms {
       const mailbox = await this.transport.read(ADDR.role(role))
       for (const p of mailbox) {
         if (p.type !== 'msg' || epochOf(p, r) !== r.epoch || seen.has(p.id) || !wanted(p)) continue
-        if (memberOf(p.from) === member) continue
+        // Its own sends: from this node only. A namesake on another node (the same role's old session,
+        // say, as both are <role>-1) is someone else, and its work was silently hidden.
+        if (!p.remote && memberOf(p.from) === member) continue
         if (!matchesSelector(meta, p.selector)) continue
         items.push({
           id: p.id, from: this.fromLabel(view, p), to: p.to ?? role, body: p.body ?? '', stamp: p.stamp,

@@ -33,6 +33,21 @@ test('a message routed to another node lands in its role mailbox, labelled with 
   void nodeA
 })
 
+test('work from a namesake on another node is shown: only this node\'s own sends are hidden', async () => {
+  const { lap, z, l } = await pair()
+  // The same role's old session on another node carries the same member name as the new one here.
+  await l.join('web-dev', { create: true, as: 'web-dev-1' })
+  assert.ok((await l.send('web-dev-1', 'node-a:web-dev', 'handover from the old session')).ok)
+  let items: Awaited<ReturnType<typeof z.inbox>> = []
+  await until('shown to web-dev-1 on node-a', () => {
+    void z.inbox('web-dev-1').then((x) => (items = x))
+    return items.some((i) => i.body === 'handover from the old session')
+  })
+  await z.send('web-dev-1', 'web-dev', 'a note to my own role')
+  assert.ok(!(await z.inbox('web-dev-1')).some((i) => i.body === 'a note to my own role'), 'its own send here stays hidden')
+  void lap
+})
+
 test('a send right after a read one gets a new id and is delivered (an id is never reused)', async () => {
   const { lap, z, l } = await pair()
   let items: Awaited<ReturnType<typeof z.inbox>> = []
