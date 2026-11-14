@@ -53,6 +53,7 @@ export class Link {
   #haveSent = false
   #haveReceived = false
   #closed = false
+  #held: string[] | undefined
 
   constructor(
     readonly ws: WebSocket,
@@ -144,6 +145,21 @@ export class Link {
     }
   }
 
+  /**
+   * Take nothing from this link but hellos until release: frames wait. For a link whose node may
+   * be a second live instance of one id, whose records would collide with the first's.
+   */
+  hold(): void {
+    this.#held ??= []
+  }
+
+  /** Take the frames held since hold, in order. */
+  release(): void {
+    const held = this.#held ?? []
+    this.#held = undefined
+    for (const text of held) this.#receive(text)
+  }
+
   #receive(text: string): void {
     // Frames already buffered when the link closed are dropped: at shutdown the log behind them is closed too.
     if (this.#closed) return
@@ -151,6 +167,10 @@ export class Link {
     try {
       f = JSON.parse(text) as Record<string, unknown>
     } catch {
+      return
+    }
+    if (this.#held && f.t !== 'hello') {
+      this.#held.push(text)
       return
     }
     if (f.t === 'hello') {

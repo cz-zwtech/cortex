@@ -302,11 +302,16 @@ export const serve = async (
         })
         if (verdict === 'wait') continue
         if (verdict === 'probe') {
+          // Nothing from the new instance is adopted until the old one is known to be gone.
+          link.hold()
           void other.probe(PROBE_MS).then((answered) => {
-            if (stopped || !link.live || !other.live) return
-            const after = duplicateVerdict(node, peer.node, false, false, { new: peer.instance, old: other.peer?.instance, oldAnswered: answered })
-            if (after === 'refuse-new') link.close(INSTANCE_CONFLICT, `another instance of ${peer.node} is live on ${node}`)
-            else if (after === 'close-old') other.close(4000, 'restarted')
+            if (stopped || !link.live) return
+            const after = other.live
+              ? duplicateVerdict(node, peer.node, false, false, { new: peer.instance, old: other.peer?.instance, oldAnswered: answered })
+              : 'close-old'
+            if (after === 'refuse-new') return link.close(INSTANCE_CONFLICT, `another instance of ${peer.node} is live on ${node}`)
+            if (other.live) other.close(4000, 'restarted')
+            link.release()
           })
           continue
         }

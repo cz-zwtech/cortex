@@ -11,7 +11,8 @@ import { ownedByUnit } from '../../server/mesh/control.js'
 import { ownAddresses, pickDials } from '../../server/mesh/daemon.js'
 import { duplicateVerdict } from '../../server/mesh/routing.js'
 import { NodeTable } from '../../server/mesh/nodes.js'
-import { node, readyLinks, until } from './harness.js'
+import { MeshLog } from '../../server/mesh/log.js'
+import { node, payloads, readyLinks, tmp, until } from './harness.js'
 
 const ipv4 = (address: string, internal = false) => ({ address, netmask: '255.255.255.0', family: 'IPv4' as const, mac: '00:00:00:00:00:00', internal, cidr: `${address}/24` })
 
@@ -98,10 +99,18 @@ test('two live instances of one node: the newer is refused and stops, the older 
   const box1 = await node('box', { peers: [hub.url], addresses: [] })
   await until('linked', () => readyLinks(hub).some((l) => l.node === 'box'))
   const kept = linkOf(hub, 'box')
-  const box2 = await node('box', { peers: [hub.url], addresses: [] })
+  box1.log.append('test-flood', 'role:x', 'from the first')
+  await until('hub has the first instance\'s record', () => payloads(hub.log).includes('from the first'))
+  // The second instance's log is its own: its seqs collide with the first's, and run past them.
+  const box2Dir = tmp()
+  const second = new MeshLog(box2Dir, 'box')
+  for (let i = 0; i < 5; i++) second.append('test-flood', 'role:x', 'from the second')
+  second.close()
+  const box2 = await node('box', { dir: box2Dir, peers: [hub.url], addresses: [] })
   await until('the newer instance stopped', () => !!box2.daemon.conflict(), 8_000)
   assert.match(box2.daemon.conflict()!, /another instance of box is live on hub/)
   assert.ok(kept.live, 'the first instance keeps its link')
+  assert.deepEqual(payloads(hub.log), ['from the first'], 'nothing from the refused instance was adopted')
   void box1
   await steady(hub, 'box')
 })
