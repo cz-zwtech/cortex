@@ -31,7 +31,13 @@ export type Ownership =
   | { state: 'started'; owner: string }
   | { state: 'done'; owner: string }
 
+const originOf = (id: string): string | undefined => (id.includes('.') ? id.slice(0, id.lastIndexOf('.')) : undefined)
+
 export const ownership = (msgId: string, posted: Posted[]): Ownership => {
+  // Owners are bare member names, which is sound only while every claim on a message is written
+  // on one node. The day claims replicate, this fires: node-qualify owners then.
+  const origins = new Set(posted.filter((p) => p.ref === msgId && (p.type === 'claim' || p.type === 'started' || p.type === 'done')).map((p) => originOf(p.id)).filter(Boolean))
+  if (origins.size > 1) throw new Error(`claims on ${msgId} come from ${origins.size} nodes (${[...origins].sort().join(', ')}); owners are not node-qualified`)
   const started = posted.filter((p) => p.type === 'started' && p.ref === msgId)
   if (started.length) {
     const owner = memberOf(earliest(started)!.from)

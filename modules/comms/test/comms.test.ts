@@ -162,6 +162,16 @@ test('earliest posted stamp wins regardless of member name or arrival order', as
   assert.deepEqual(ownership('m', [...claims].reverse()), ownership('m', claims))
 })
 
+test('claims on one message from two nodes are refused: owners are bare member names', async () => {
+  const { ownership } = await import('../server/claims.js')
+  const claims = [
+    { v: 1 as const, type: 'claim' as const, stamp: 10, from: 'acme-dev/acme-dev-1', ref: 'm', id: 'node-a.4' },
+    { v: 1 as const, type: 'claim' as const, stamp: 20, from: 'acme-dev/acme-dev-1', ref: 'm', id: 'node-b.9' },
+  ]
+  assert.throws(() => ownership('m', claims), /from 2 nodes/)
+  assert.deepEqual(ownership('m', claims.slice(0, 1)), { state: 'claimed', owner: 'acme-dev-1', claimId: 'node-a.4' })
+})
+
 test('rule (a): exact-equal stamps break ties by member name', async () => {
   const { ownership } = await import('../server/claims.js')
   const claims = [
