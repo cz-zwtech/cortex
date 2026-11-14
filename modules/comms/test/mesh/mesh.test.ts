@@ -141,7 +141,13 @@ test('a node that moves to a new address is still the same node, at only its new
   const first = new NodeTable(a.log.db).get('node-b')!
   await b1.close()
   const b2 = await node('node-b', { dir: bDir }) // same identity and peers, new port
-  await until('the new address is recorded', () => !!new NodeTable(a.log.db).get('node-b')?.addresses.includes(b2.url))
+  // The handshake adds the new address beside the old one; b2's next announcement replaces them.
+  // b2 reuses bDir on purpose: on a wiped log it would announce at seq 1, lose to the old announcement,
+  // and the old address would stay.
+  await until('only the new address is recorded', () => {
+    const addrs = new NodeTable(a.log.db).get('node-b')?.addresses ?? []
+    return addrs.length === 1 && addrs[0] === b2.url
+  })
   const rows = new NodeTable(a.log.db).list().filter((n) => n.node === 'node-b')
   assert.equal(rows.length, 1)
   assert.deepEqual(rows[0]!.addresses, [b2.url], 'the address it left is not dialed again')
