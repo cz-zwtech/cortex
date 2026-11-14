@@ -103,12 +103,19 @@ export class Comms {
     this.mesh = opts.mesh
   }
 
-  /** A node's alias if it has one that no other node shares, else its id. */
+  /**
+   * A node's alias, else its id. An alias several nodes share (a rebuilt node beside the id it left
+   * behind) stays with the one reachable now, if only one is; the others show their ids. Either way
+   * the label stays something a person can send to.
+   */
   private label(view: MeshView | undefined, node: string): string {
-    const alias = view?.nodes.find((n) => n.node === node)?.alias
-    if (!alias) return node
-    const shared = view!.nodes.some((n) => n.node !== node && n.alias === alias) || view!.self.alias === alias
-    return shared ? node : alias
+    const me = view?.nodes.find((n) => n.node === node)
+    if (!me?.alias) return node
+    if (view!.self.alias === me.alias) return node
+    const sharing = view!.nodes.filter((n) => n.alias === me.alias)
+    if (sharing.length === 1) return me.alias
+    const reachable = sharing.filter((n) => n.reachable)
+    return reachable.length === 1 && reachable[0]!.node === node ? me.alias : node
   }
 
   // ── reading ───────────────────────────────────────────────────────────────

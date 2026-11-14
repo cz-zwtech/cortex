@@ -75,6 +75,7 @@
     "test/meshWho.test.ts",
     "test/renames.test.ts",
     "test/dialogue.test.ts",
+    "test/labels.test.ts",
     "test/mesh/mesh.test.ts",
     "test/mesh/routed.test.ts",
     "test/mesh/files.test.ts",
