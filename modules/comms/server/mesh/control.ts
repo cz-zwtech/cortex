@@ -17,6 +17,8 @@ export const meshPort = (dir: string, env: NodeJS.ProcessEnv = process.env) => e
 
 const REPO = path.resolve(import.meta.dirname, '..', '..', '..', '..')
 export const UNIT = 'cortex-mesh.service'
+/** The exit when another live instance holds this node's id: the unit does not restart it. */
+export const EXIT_CONFLICT = 78
 
 const alive = (pid: number) => {
   try {
@@ -115,6 +117,7 @@ export const unitText = (): string =>
     '[Service]',
     `ExecStart=${path.join(REPO, 'node_modules', '.bin', 'tsx')} ${path.join(REPO, 'bin', 'cortex-mesh.ts')} serve`,
     'Restart=on-failure',
+    `RestartPreventExitStatus=${EXIT_CONFLICT}`,
     '',
     '[Install]',
     'WantedBy=default.target',

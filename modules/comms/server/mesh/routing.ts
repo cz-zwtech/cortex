@@ -75,28 +75,36 @@ export const announceable = (drops: number[], openedAt: number, now: number): bo
  */
 export const isDrop = (peerValidated: boolean, stillLinked: boolean): boolean => peerValidated && !stillLinked
 
-export type DuplicateVerdict = 'close-new' | 'close-old' | 'wait'
+export type DuplicateVerdict = 'close-new' | 'close-old' | 'wait' | 'probe' | 'refuse-new'
+
+/** The close code a node gets when another live instance already holds its id. */
+export const INSTANCE_CONFLICT = 4005
 
 /**
  * A second live link to a node this end already holds a link to. Dialed from both ends: keep the
  * one dialed by the lower node id. Both dialed by one end: that end keeps its older link and closes
  * the newer, and the other end waits for the close. Each end sees hellos in its own order, so if
- * both judged a one-sided pair, each could close a different link and the pair would churn. The
- * one exception: both called in from the other node but under different instances, so it has
- * restarted, and the older link is left over from before it (it may look live until the heartbeat
- * gives up on it, and nothing on the other side will ever close it).
+ * both judged a one-sided pair, each could close a different link and the pair would churn.
+ *
+ * The exception: both called in from the other node but under different instances. Either it
+ * restarted and the older link is left over (silent, though it may look open until the heartbeat
+ * gives up), or two instances hold one id at once, which loses messages without a trace. Only the
+ * old link's liveness tells them apart, so this end probes it first (`oldAnswered` undefined:
+ * 'probe'): silent, close it; answering, refuse the newer, and that daemon stops.
  */
 export const duplicateVerdict = (
   self: string,
   peer: string,
   newIsOut: boolean,
   oldIsOut: boolean,
-  instances: { new?: string; old?: string } = {},
+  instances: { new?: string; old?: string; oldAnswered?: boolean } = {},
 ): DuplicateVerdict => {
   const dialer = (out: boolean) => (out ? self : peer)
   if (newIsOut === oldIsOut) {
     if (dialer(newIsOut) === self) return 'close-new'
-    return instances.new && instances.old && instances.new !== instances.old ? 'close-old' : 'wait'
+    if (!instances.new || !instances.old || instances.new === instances.old) return 'wait'
+    if (instances.oldAnswered === undefined) return 'probe'
+    return instances.oldAnswered ? 'refuse-new' : 'close-old'
   }
   return dialer(newIsOut) === [self, peer].sort()[0] ? 'close-old' : 'close-new'
 }

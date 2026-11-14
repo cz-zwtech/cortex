@@ -47,6 +47,8 @@ export class Link {
   peer?: Hello
   lastPongAt = Date.now()
   openedAt = Date.now()
+  /** The code and reason the other end closed this link with, when it did. */
+  closedBy?: { code: number; reason: string }
   #peerHas = new Map<string, number>()
   #haveSent = false
   #haveReceived = false
@@ -61,7 +63,10 @@ export class Link {
   ) {
     ws.on('message', (data) => this.#receive(String(data)))
     ws.on('pong', () => (this.lastPongAt = Date.now()))
-    ws.on('close', () => this.#close())
+    ws.on('close', (code, reason) => {
+      this.closedBy ??= { code, reason: String(reason) }
+      this.#close()
+    })
     ws.on('error', () => this.#close())
     this.sendHello()
   }
@@ -106,6 +111,17 @@ export class Link {
     if (!this.ready || !this.live) return false
     this.#send(frame)
     return true
+  }
+
+  /** Ping now; resolves whether a pong came back within `ms`. */
+  probe(ms: number): Promise<boolean> {
+    const at = Date.now()
+    try {
+      this.ws.ping()
+    } catch {
+      return Promise.resolve(false)
+    }
+    return new Promise((ok) => setTimeout(() => ok(this.live && this.lastPongAt >= at), ms))
   }
 
   close(code = 1000, reason = ''): void {

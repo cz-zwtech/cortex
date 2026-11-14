@@ -24,7 +24,7 @@ import path from 'node:path'
 import { discover } from '../core/discover.js'
 import { machineId } from '../core/machineId.js'
 import { dataRoot, meshDir, modulesDir, runScript, stateDir } from '../core/paths.js'
-import { isRunning, meshPort, readStatus, start, stop, unitText } from '../modules/comms/server/mesh/control.js'
+import { EXIT_CONFLICT, isRunning, meshPort, readStatus, start, stop, unitText } from '../modules/comms/server/mesh/control.js'
 import { serve } from '../modules/comms/server/mesh/daemon.js'
 import { MeshLog, registerDeclaredKinds } from '../modules/comms/server/mesh/log.js'
 import type { Accept } from '../modules/comms/server/mesh/router.js'
@@ -123,7 +123,9 @@ switch (cmd) {
     const comms = acceptRouted(bridge)
     const accept: Accept = (address, body, from) =>
       address.startsWith('gate') ? (gateway?.accept(address, body, from) ?? { ok: false, reason: 'this node runs no gateway' }) : comms(address, body, from)
+    let onConflict = (_reason: string) => {}
     const d = await serve(dir, node, port, {
+      onConflict: (reason) => onConflict(reason),
       roles: localRoles(bridge),
       intent,
       // A node that does not listen opens no port and advertises nothing: it only dials its peers.
@@ -157,6 +159,13 @@ switch (cmd) {
       await gateway?.close()
       await d.close()
       process.exit(0)
+    }
+    // Two live instances under one id lose messages without a trace: stop, and stay stopped (the
+    // unit does not restart this exit code) until the other is gone or this node gets its own id.
+    onConflict = (reason) => {
+      console.error(`cortex-mesh: STOPPED, ${reason}. Two daemons with one node id lose messages; stop the other one, or give this node its own id (remove its node-id file and restart).`)
+      clearInterval(unseen)
+      void (gateway?.close() ?? Promise.resolve()).finally(() => process.exit(EXIT_CONFLICT))
     }
     process.on('SIGTERM', shut)
     process.on('SIGINT', shut)

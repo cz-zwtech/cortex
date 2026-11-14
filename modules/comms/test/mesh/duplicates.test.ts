@@ -66,24 +66,43 @@ test('links dialed from both ends: both ends keep the one dialed by the lower id
   assert.equal(duplicateVerdict('b', 'a', true, false), 'close-new')
 })
 
-test('a node that called in again under a new instance restarted: its old link goes', () => {
-  assert.equal(duplicateVerdict('hub', 'box', false, false, { new: 'i2', old: 'i1' }), 'close-old')
-  assert.equal(duplicateVerdict('hub', 'box', false, false, { new: 'i1', old: 'i1' }), 'wait', 'one instance: its own end decides')
-  assert.equal(duplicateVerdict('hub', 'box', false, false, { new: 'i2' }), 'wait', 'an older peer sends no instance')
+test('a node that called in again under a new instance: probe the old link, then close it or refuse the new', () => {
+  const v = (i: { new?: string; old?: string; oldAnswered?: boolean }) => duplicateVerdict('hub', 'box', false, false, i)
+  assert.equal(v({ new: 'i2', old: 'i1' }), 'probe')
+  assert.equal(v({ new: 'i2', old: 'i1', oldAnswered: false }), 'close-old', 'silent: left over from a restart')
+  assert.equal(v({ new: 'i2', old: 'i1', oldAnswered: true }), 'refuse-new', 'answering: two instances hold one id')
+  assert.equal(v({ new: 'i1', old: 'i1' }), 'wait', 'one instance: its own end decides')
+  assert.equal(v({ new: 'i2' }), 'wait', 'an older peer sends no instance')
   assert.equal(duplicateVerdict('box', 'hub', true, true, { new: 'i1', old: 'i1' }), 'close-new', 'the dialer itself')
 })
 
-test('a restarted dialer whose old link still looks live: the acceptor drops the old one', async () => {
+/** The acceptor's side of a node's link, and the node's own side of it. */
+const linkOf = (n: Awaited<ReturnType<typeof node>>, peer: string) => n.daemon.links().find((l) => l.live && l.ready && l.node === peer)!
+
+test('a restarted dialer whose old link still looks open but is silent: the acceptor drops the old one', async () => {
   const hub = await node('hub')
   const box1 = await node('box', { peers: [hub.url], addresses: [] })
   await until('linked', () => readyLinks(hub).some((l) => l.node === 'box'))
-  const old = readyLinks(hub).find((l) => l.node === 'box')!
-  // A second instance under the same id while the first one's link stands, as after a restart the
-  // acceptor has not noticed yet.
+  const old = linkOf(hub, 'box')
+  // The first instance stops answering without closing, as a process that died with its host.
+  ;(linkOf(box1, 'hub').ws as unknown as { _socket: { pause: () => void } })._socket.pause()
   const box2 = await node('box', { peers: [hub.url], addresses: [] })
-  await until('the old link is closed', () => !old.live)
+  await until('the old link is closed', () => !old.live, 8_000)
+  assert.equal(box2.daemon.conflict(), undefined)
   await box1.close()
-  void box2
+  await steady(hub, 'box')
+})
+
+test('two live instances of one node: the newer is refused and stops, the older stays', async () => {
+  const hub = await node('hub')
+  const box1 = await node('box', { peers: [hub.url], addresses: [] })
+  await until('linked', () => readyLinks(hub).some((l) => l.node === 'box'))
+  const kept = linkOf(hub, 'box')
+  const box2 = await node('box', { peers: [hub.url], addresses: [] })
+  await until('the newer instance stopped', () => !!box2.daemon.conflict(), 8_000)
+  assert.match(box2.daemon.conflict()!, /another instance of box is live on hub/)
+  assert.ok(kept.live, 'the first instance keeps its link')
+  void box1
   await steady(hub, 'box')
 })
 

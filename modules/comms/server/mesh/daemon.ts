@@ -39,7 +39,7 @@ import { isPrivateAddress } from './net.js'
 import { isValidated, NodeTable, type AnnouncedRole, type Announcement, type Intent, type Source } from './nodes.js'
 import { readPeers } from './peers.js'
 import { Router, type Accept, type DeliverFiles, type OutboxRow, type RouteFrame } from './router.js'
-import { announceable, computeRoutes, duplicateVerdict, isDrop, type Route } from './routing.js'
+import { announceable, computeRoutes, duplicateVerdict, INSTANCE_CONFLICT, isDrop, type Route } from './routing.js'
 import { isExpired, limitFor, OFFLINE_ADDRESS, readOfflinePolicy, type OfflineNotice, type OfflinePolicy } from './offline.js'
 
 export const DEFAULT_PORT = 3021
@@ -184,7 +184,12 @@ export type ServeOpts = {
   offline?: OfflinePolicy
   /** File transfer: the secret gate for a received file, and the message that announces delivered files. Absent: files refused. */
   files?: { scan: (file: string, address: string) => string | undefined; deliver: DeliverFiles }
+  /** A peer refused this node because another live instance holds its id; the daemon has stopped. Default: say so on stderr. */
+  onConflict?: (reason: string) => void
 }
+
+/** How long a probed link has to answer before it counts as left over from a restart. */
+const PROBE_MS = 2_000
 
 export const defaultAlias = () => os.hostname().split('.')[0]!.toLowerCase()
 
@@ -193,7 +198,14 @@ export const serve = async (
   node: string,
   port: number,
   opts: ServeOpts = {},
-): Promise<{ close: () => Promise<void>; links: () => Link[]; routes: () => Map<string, Route>; router: Router }> => {
+): Promise<{
+  close: () => Promise<void>
+  links: () => Link[]
+  routes: () => Map<string, Route>
+  router: Router
+  /** Why a peer refused this node, when another live instance holds its id. */
+  conflict: () => string | undefined
+}> => {
   const host = opts.host ?? '0.0.0.0'
   const log = new MeshLog(dir, node)
   log.rejoin()
@@ -216,6 +228,8 @@ export const serve = async (
   const ownAddr = new Set(me.addresses)
   const links = new Set<Link>()
   let stopped = false
+  let conflict: string | undefined
+  let stopSelf: () => Promise<void> = async () => {}
 
   const flushAll = (except?: Link) => {
     for (const l of links) if (l !== except) l.flush()
@@ -287,6 +301,15 @@ export const serve = async (
           old: other.peer?.instance,
         })
         if (verdict === 'wait') continue
+        if (verdict === 'probe') {
+          void other.probe(PROBE_MS).then((answered) => {
+            if (stopped || !link.live || !other.live) return
+            const after = duplicateVerdict(node, peer.node, false, false, { new: peer.instance, old: other.peer?.instance, oldAnswered: answered })
+            if (after === 'refuse-new') link.close(INSTANCE_CONFLICT, `another instance of ${peer.node} is live on ${node}`)
+            else if (after === 'close-old') other.close(4000, 'restarted')
+          })
+          continue
+        }
         ;(verdict === 'close-old' ? other : link).close(4000, 'duplicate')
         if (verdict === 'close-new') return
       }
@@ -304,6 +327,11 @@ export const serve = async (
     },
     onClose: (link: Link) => {
       links.delete(link)
+      if (link.direction === 'out' && link.closedBy?.code === INSTANCE_CONFLICT && !stopped) {
+        conflict = link.closedBy.reason || 'another instance of this node is live'
+        void stopSelf().then(() => (opts.onConflict ?? ((r) => console.error(`cortex-mesh: stopped: ${r}`)))(conflict!))
+        return
+      }
       // A drop is losing the node, not losing one of two links to it: the
       // duplicate the tie-break closes leaves the other one live. A closed link
       // is never `ready`, so ask whether it carried a validated peer.
@@ -568,11 +596,10 @@ export const serve = async (
   writeStatus(dir, status())
   const statusTimer = setInterval(() => writeStatus(dir, status()), STATUS_MS)
 
-  return {
-    links: () => [...links],
-    routes,
-    router,
-    close: async () => {
+  // Once, whoever asks first: a conflict stops it, and its owner may close it again after.
+  let closing: Promise<void> | undefined
+  stopSelf = () =>
+    (closing ??= (async () => {
       stopped = true
       clearInterval(tick)
       clearInterval(heartbeat)
@@ -583,6 +610,6 @@ export const serve = async (
       writeStatus(dir, { ...status(), running: false, links: [] })
       fs.rmSync(pidFile(dir), { force: true })
       log.close()
-    },
-  }
+    })())
+  return { links: () => [...links], routes, router, conflict: () => conflict, close: () => stopSelf() }
 }
