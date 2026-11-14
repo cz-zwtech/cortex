@@ -165,15 +165,20 @@ export class Comms {
     await this.emit({ op: 'delete', role }, by)
     for (const p of pending) {
       const sender = memberOf(p.from)
-      await this.transport.post(ADDR.member(sender), {
+      // The id the sender knows: a routed message's id on its origin node.
+      const theirId = p.remote?.id ?? p.id
+      const notice: Envelope = {
         v: 1,
         type: 'msg',
         stamp: this.stampOf(),
         from: by,
         to: sender,
-        ref: p.id,
-        body: `role ${role} was deleted before your message ${p.id} was handled: ${(p.body ?? '').slice(0, 120)}`,
-      })
+        ref: theirId,
+        body: `role ${role} was deleted before your message ${theirId} was handled: ${(p.body ?? '').slice(0, 120)}`,
+      }
+      // A routed message's sender is on its own node; a local mailbox of that name is someone else's.
+      if (p.remote && this.transport.postTo) await this.transport.postTo(p.remote.node, ADDR.member(sender), notice)
+      else if (!p.remote) await this.transport.post(ADDR.member(sender), notice)
     }
     return pending.length
   }

@@ -48,6 +48,29 @@ test('work from a namesake on another node is shown: only this node\'s own sends
   void lap
 })
 
+test('a routed message left unhandled when its role is deleted is returned to the sender on its own node', async () => {
+  const { lap, z, l } = await pair()
+  // node-a keeps a role after web-dev goes: a node with none is not validated, and its links carry nothing.
+  await z.join('ops', { create: true, as: 'ops-1' })
+  const sent = await l.send('pm-1', 'node-a:web-dev', 'retire this')
+  assert.ok(sent.ok, sent.outcome)
+  let items: Awaited<ReturnType<typeof z.inbox>> = []
+  await until('delivered on node-a', () => {
+    void z.inbox('web-dev-1').then((x) => (items = x))
+    return items.length === 1
+  })
+  const left = await z.leaveRole('web-dev', 'web-dev-1')
+  assert.equal(left.returned, 1)
+  let back: Awaited<ReturnType<typeof l.inbox>> = []
+  await until('the notice reaches pm-1 on the laptop', () => {
+    void l.inbox('pm-1').then((x) => (back = x))
+    return back.some((i) => /role web-dev was deleted before your message/.test(i.body))
+  })
+  const notice = back.find((i) => /role web-dev was deleted/.test(i.body))!
+  assert.ok(notice.body.includes(sent.id!), `it names the id the sender knows: ${notice.body}`)
+  void lap
+})
+
 test('a send right after a read one gets a new id and is delivered (an id is never reused)', async () => {
   const { lap, z, l } = await pair()
   let items: Awaited<ReturnType<typeof z.inbox>> = []
