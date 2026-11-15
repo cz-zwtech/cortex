@@ -14,9 +14,12 @@ test('a node whose last role goes holds its outbound, and says how many wait', a
     void z.inbox('web-dev-1').then((x) => (n = x.length))
     return n === 1
   })
-  assert.equal(heldOutbound(nodeA.log.db), 0)
+  assert.equal(heldOutbound(nodeA.log), 0)
   await z.leaveRole('web-dev', 'web-dev-1')
-  // The return notice is queued, but node-a now has no role, so its links carry nothing.
-  await until('the notice is held', () => heldOutbound(nodeA.log.db) === 1)
+  // Counted at once, before the pump makes the notice an outbox row: that is when leave reports it.
+  assert.equal(heldOutbound(nodeA.log), 1)
+  // node-a now has no role, so its links carry nothing: the notice stays held once the pump has it too.
+  await new Promise((r) => setTimeout(r, 1_000))
+  assert.equal(heldOutbound(nodeA.log), 1)
   assert.match(rolelessHoldNote(1), /^1 message\(s\) wait here until this node takes a role again/)
 })

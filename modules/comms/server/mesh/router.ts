@@ -162,13 +162,19 @@ export const openOutbox = (db: Database.Database) => {
   }
 }
 
-/** Messages this node still holds for other nodes: neither delivered nor failed. */
-export const heldOutbound = (db: Database.Database): number => {
-  try {
-    return (db.prepare('SELECT count(*) AS n FROM outbox WHERE delivered_at IS NULL AND failed IS NULL').get() as { n: number }).n
-  } catch {
-    return 0 // no daemon has run here, so nothing was ever queued
-  }
+/**
+ * Messages this node still holds for other nodes: neither delivered nor failed. A send is a route-out
+ * record until the daemon's pump makes it an outbox row (both are id origin.seq), so count either,
+ * once: right after a send the row may not exist yet.
+ */
+export const heldOutbound = (log: Pick<MeshLog, 'db' | 'origin'>): number => {
+  const queued = `SELECT origin || '.' || seq AS id FROM records WHERE kind = 'route-out' AND address = ? AND origin = ?`
+  const hasOutbox = !!log.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'outbox'").get()
+  const sql = hasOutbox
+    ? `SELECT count(*) AS n FROM (SELECT id FROM outbox WHERE delivered_at IS NULL AND failed IS NULL
+         UNION SELECT q.id FROM (${queued}) q WHERE q.id NOT IN (SELECT id FROM outbox))`
+    : `SELECT count(*) AS n FROM (${queued})`
+  return (log.db.prepare(sql).get(OUTBOX_ADDRESS, log.origin) as { n: number }).n
 }
 
 /** A node with no role is not validated, so its links carry nothing: what it holds just waits. */

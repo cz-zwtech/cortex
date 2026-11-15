@@ -151,7 +151,7 @@ const rolelessNote = (): string => {
   const log = new MeshLog(meshDir(), machineId())
   try {
     if (localRoles(log)().length) return ''
-    const held = heldOutbound(log.db)
+    const held = heldOutbound(log)
     return held ? `. This node has no role now, so ${rolelessHoldNote(held)}` : ''
   } finally {
     log.close()

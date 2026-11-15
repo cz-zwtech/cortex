@@ -70,7 +70,7 @@ const printStatus = () => {
   if (s && !isValidated(s.intent, s.roles ?? [])) {
     const log = new MeshLog(dir, machineId())
     try {
-      const held = heldOutbound(log.db)
+      const held = heldOutbound(log)
       if (held) console.log(`held:    ${rolelessHoldNote(held)}`)
     } finally {
       log.close()
