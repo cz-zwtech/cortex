@@ -162,6 +162,18 @@ export const openOutbox = (db: Database.Database) => {
   }
 }
 
+/** Messages this node still holds for other nodes: neither delivered nor failed. */
+export const heldOutbound = (db: Database.Database): number => {
+  try {
+    return (db.prepare('SELECT count(*) AS n FROM outbox WHERE delivered_at IS NULL AND failed IS NULL').get() as { n: number }).n
+  } catch {
+    return 0 // no daemon has run here, so nothing was ever queued
+  }
+}
+
+/** A node with no role is not validated, so its links carry nothing: what it holds just waits. */
+export const rolelessHoldNote = (n: number): string => `${n} message(s) wait here until this node takes a role again: a node with no role exchanges nothing`
+
 export type Accept = (address: string, body: string, from: string) => { ok: true } | { ok: false; reason: string }
 
 /** Files arrived, verified and in the inbox: write the message that tells the mailbox, returning its id. */

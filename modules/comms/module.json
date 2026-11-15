@@ -78,6 +78,7 @@
     "test/labels.test.ts",
     "test/mesh/mesh.test.ts",
     "test/mesh/routed.test.ts",
+    "test/mesh/roleless.test.ts",
     "test/mesh/files.test.ts",
     "test/mesh/nodeConfig.test.ts",
     "test/mesh/live.test.ts",
