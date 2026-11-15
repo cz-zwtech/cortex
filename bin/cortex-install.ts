@@ -355,7 +355,7 @@ if (cmds.skipped.length) {
 // The mesh: started now so the first session finds its bus, unless under test.
 // --no-mesh-start: used by /cortex-update, which leaves a stopped mesh stopped (hub, when Cortex is off).
 if (fs.existsSync(path.join(paths.modulesDir, 'comms', 'module.json')) && !underTest() && !process.argv.includes('--no-mesh-start')) {
-  const { start, readStatus } = await import('../modules/comms/server/mesh/control.js')
+  const { start, startProblem, readStatus } = await import('../modules/comms/server/mesh/control.js')
   const { connects, migrateConnect } = await import('../modules/comms/server/mesh/connect.js')
   const m = migrateConnect(meshDir())
   if (m.wrote) console.log(`  connect:     listen ${m.listen ? 'on' : 'off'} (${m.why}); change with cortex-mesh listen on|off`)
@@ -363,7 +363,7 @@ if (fs.existsSync(path.join(paths.modulesDir, 'comms', 'module.json')) && !under
   else {
     const r = await start(meshDir(), { wait: true })
     const st = readStatus(meshDir())
-    console.log(`  mesh:        ${r === 'failed' ? `did not start; see ${path.join(meshDir(), 'daemon.log')}` : `running${st?.port ? ` on :${st.port}` : ''} (cortex-mesh status for peers)`}`)
+    console.log(`  mesh:        ${startProblem(r, meshDir()) ? `did not start: ${startProblem(r, meshDir())}` : `running${st?.port ? ` on :${st.port}` : ''} (cortex-mesh status for peers)`}`)
   }
 }
 const line = await installStatusline(paths)

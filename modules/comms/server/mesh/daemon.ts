@@ -102,6 +102,72 @@ export type Status = {
 export const statusFile = (dir: string) => path.join(dir, 'status.json')
 export const pidFile = (dir: string) => path.join(dir, 'daemon.pid')
 
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+/** Another live daemon already serves this dir. */
+export class DaemonLocked extends Error {
+  constructor(readonly holder: number) {
+    super(holder ? `a mesh daemon (pid ${holder}) already serves this dir; stop it first` : 'another mesh daemon was taking this dir at the same moment; try again')
+  }
+}
+
+/** Whether a process is a mesh daemon: its command line runs cortex-mesh serve. */
+const isServe = (pid: number, readCmdline = (p: number) => fs.readFileSync(`/proc/${p}/cmdline`, 'utf-8')): boolean => {
+  try {
+    const argv = readCmdline(pid).split('\0')
+    return argv.some((a) => a.endsWith('cortex-mesh.ts')) && argv.includes('serve')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Take this dir's pid file for `pid`, or say which live daemon holds it. Created exclusively, so of
+ * two daemons starting together one wins; a file naming a dead pid, or a pid reused by something
+ * that is no mesh daemon (after a reboot), is taken over.
+ */
+export const acquirePid = (dir: string, pid: number, serving = isServe): { ok: true } | { ok: false; holder: number } => {
+  const file = pidFile(dir)
+  fs.mkdirSync(dir, { recursive: true })
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.writeFileSync(file, String(pid), { flag: 'wx' })
+      return { ok: true }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+    }
+    const holder = readPid(file)
+    if (holder === pid) return { ok: true }
+    if (holder && alive(holder) && serving(holder)) return { ok: false, holder }
+    fs.rmSync(file, { force: true })
+  }
+  // Lost the race twice: someone else is taking it now. 0 when it was released again meanwhile.
+  return { ok: false, holder: readPid(file) }
+}
+
+const readPid = (file: string): number => {
+  try {
+    return Number(fs.readFileSync(file, 'utf-8')) || 0
+  } catch {
+    return 0
+  }
+}
+
+/** Remove the pid file only when it still names `pid`: another daemon's file is never ours to drop. */
+export const releasePid = (dir: string, pid: number): void => {
+  try {
+    if (Number(fs.readFileSync(pidFile(dir), 'utf-8')) === pid) fs.rmSync(pidFile(dir), { force: true })
+  } catch {
+    /* already gone */
+  }
+}
+
 const writeStatus = (dir: string, s: Status) => {
   const tmp = `${statusFile(dir)}.${process.pid}.tmp`
   fs.writeFileSync(tmp, JSON.stringify(s))
@@ -207,6 +273,9 @@ export const serve = async (
   conflict: () => string | undefined
 }> => {
   const host = opts.host ?? '0.0.0.0'
+  // Before anything dials: a second daemon on one dir would take this node's link from the first.
+  const lock = acquirePid(dir, process.pid)
+  if (!lock.ok) throw new DaemonLocked(lock.holder)
   const log = new MeshLog(dir, node)
   log.rejoin()
   const nodes = new NodeTable(log.db)
@@ -597,7 +666,6 @@ export const serve = async (
       })
     })(),
   })
-  fs.writeFileSync(pidFile(dir), String(process.pid))
   writeStatus(dir, status())
   const statusTimer = setInterval(() => writeStatus(dir, status()), STATUS_MS)
 
@@ -613,7 +681,7 @@ export const serve = async (
       wss.close()
       if (listening) await new Promise<void>((r) => server.close(() => r()))
       writeStatus(dir, { ...status(), running: false, links: [] })
-      fs.rmSync(pidFile(dir), { force: true })
+      releasePid(dir, process.pid)
       log.close()
     })())
   return { links: () => [...links], routes, router, conflict: () => conflict, close: () => stopSelf() }
