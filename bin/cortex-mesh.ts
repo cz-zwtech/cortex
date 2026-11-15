@@ -27,8 +27,8 @@ import { dataRoot, meshDir, modulesDir, runScript, stateDir } from '../core/path
 import { EXIT_CONFLICT, isRunning, meshPort, readStatus, start, stop, unitText } from '../modules/comms/server/mesh/control.js'
 import { serve } from '../modules/comms/server/mesh/daemon.js'
 import { MeshLog, registerDeclaredKinds } from '../modules/comms/server/mesh/log.js'
-import type { Accept } from '../modules/comms/server/mesh/router.js'
-import type { Intent } from '../modules/comms/server/mesh/nodes.js'
+import { heldOutbound, rolelessHoldNote, type Accept } from '../modules/comms/server/mesh/router.js'
+import { isValidated, type Intent } from '../modules/comms/server/mesh/nodes.js'
 import { acceptRouted, deliverFiles, localRoles, notifySender, unseenNotices } from '../modules/comms/server/meshBridge.js'
 import { scanForSecrets } from '../core/secrets.js'
 import { gateFile } from '../modules/comms/server/mesh/files.js'
@@ -67,6 +67,15 @@ const printStatus = () => {
   console.log(`connect: ${listen ? 'listens' : 'does not listen'}${unset ? ' (not set yet: as this node did before; the next start or install writes it)' : ''}; ${readPeers(dir).length} peer(s)${connects(dir) ? '' : ' (local-only: no daemon)'}`)
   console.log(`daemon:  ${isRunning(dir) ? `running (pid ${s?.pid}, ${s?.port && listen ? `port ${s.port}` : 'no open port'})` : 'not running'}`)
   console.log(`roles:   ${s?.roles?.length ? s.roles.join(', ') : 'none yet (unvalidated: a node exchanges records once it has a role)'}`)
+  if (s && !isValidated(s.intent, s.roles ?? [])) {
+    const log = new MeshLog(dir, machineId())
+    try {
+      const held = heldOutbound(log)
+      if (held) console.log(`held:    ${rolelessHoldNote(held)}`)
+    } finally {
+      log.close()
+    }
+  }
   const peers = readPeers(dir)
   console.log(`configured: ${peers.length ? peers.join(', ') : 'none'}`)
   const links = s?.links ?? []

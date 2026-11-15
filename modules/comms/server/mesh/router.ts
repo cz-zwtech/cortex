@@ -162,6 +162,24 @@ export const openOutbox = (db: Database.Database) => {
   }
 }
 
+/**
+ * Messages this node still holds for other nodes: neither delivered nor failed. A send is a route-out
+ * record until the daemon's pump makes it an outbox row (both are id origin.seq), so count either,
+ * once: right after a send the row may not exist yet.
+ */
+export const heldOutbound = (log: Pick<MeshLog, 'db' | 'origin'>): number => {
+  const queued = `SELECT origin || '.' || seq AS id FROM records WHERE kind = 'route-out' AND address = ? AND origin = ?`
+  const hasOutbox = !!log.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'outbox'").get()
+  const sql = hasOutbox
+    ? `SELECT count(*) AS n FROM (SELECT id FROM outbox WHERE delivered_at IS NULL AND failed IS NULL
+         UNION SELECT q.id FROM (${queued}) q WHERE q.id NOT IN (SELECT id FROM outbox))`
+    : `SELECT count(*) AS n FROM (${queued})`
+  return (log.db.prepare(sql).get(OUTBOX_ADDRESS, log.origin) as { n: number }).n
+}
+
+/** A node with no role is not validated, so its links carry nothing: what it holds just waits. */
+export const rolelessHoldNote = (n: number): string => `${n} message(s) wait here until this node takes a role again: a node with no role exchanges nothing`
+
 export type Accept = (address: string, body: string, from: string) => { ok: true } | { ok: false; reason: string }
 
 /** Files arrived, verified and in the inbox: write the message that tells the mailbox, returning its id. */

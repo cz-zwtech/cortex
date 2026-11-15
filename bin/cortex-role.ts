@@ -42,6 +42,7 @@ import { machineId } from '../core/machineId.js'
 import { MeshLog } from '../modules/comms/server/mesh/log.js'
 import { meshView } from '../modules/comms/server/mesh/view.js'
 import { localRoles } from '../modules/comms/server/meshBridge.js'
+import { heldOutbound, rolelessHoldNote } from '../modules/comms/server/mesh/router.js'
 import { meshRoleLine, meshRoles } from '../modules/comms/server/meshWho.js'
 import { metaFor, openComms } from '../modules/comms/server/session.js'
 import type { Metadata } from '../modules/comms/server/types.js'
@@ -142,8 +143,20 @@ const readBody = (from: string[]): string => {
 /** What leaving did to the role: an emptied role is deleted unless --keep. */
 const endNote = (role: string, r: { deleted: boolean; returned: number }): string =>
   r.deleted
-    ? `; ${role} had no members left and was deleted${r.returned ? `, ${r.returned} unhandled message(s) returned to their senders` : ''}`
+    ? `; ${role} had no members left and was deleted${r.returned ? `, ${r.returned} unhandled message(s) returned to their senders` : ''}${rolelessNote()}`
     : ''
+
+/** The last role here just went: say what that holds back, rather than let it wait unseen. */
+const rolelessNote = (): string => {
+  const log = new MeshLog(meshDir(), machineId())
+  try {
+    if (localRoles(log)().length) return ''
+    const held = heldOutbound(log)
+    return held ? `. This node has no role now, so ${rolelessHoldNote(held)}` : ''
+  } finally {
+    log.close()
+  }
+}
 
 /**
  * Joining mid-session (join, rename, move) must say how to listen in the same
