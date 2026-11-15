@@ -14,7 +14,7 @@ import { frontmatterOf } from '../../memory/server/frontmatter.js'
 import { ContextStore } from '../../memory/server/context/store.js'
 import { adoptRecords, ingest } from '../../memory/server/ingest.js'
 import { Journal } from '../../memory/server/journal.js'
-import { retire } from '../../memory/server/retire.js'
+import { retire, unretire } from '../../memory/server/retire.js'
 import { MemoryStore } from '../../memory/server/store.js'
 import { fromNdjson, toNdjson } from '../server/bundle.js'
 import { MindConfigSchema } from '../server/config.js'
@@ -119,6 +119,54 @@ test('a retirement travels and the peer keeps the memory retired; one of a memor
   assert.notEqual(b.store.get(shared)!.retiredAt, undefined, 'retired on the peer')
   assert.ok(!r.text.includes(contoso), 'the kept-home one is not named')
   assert.equal(b.journal.versionVector()['node-a'], 4, 'its retirement went as a gap, so the vector passes it')
+})
+
+test('a retirement over a kept-home version and a shared one reaches the peer for the shared one, and says one was withheld', async () => {
+  const a = node('node-a')
+  const b = node('node-b')
+  a.roles.set('s-contoso', ['contoso'])
+  a.roles.set('s-pm', ['pm'])
+  a.kinds.set('s-contoso', { entrypoint: 'cli' })
+  a.kinds.set('s-pm', { entrypoint: 'cli' })
+  // One memory, one file: the first version written in a local role (kept home), the second shared.
+  const id = a.write('release-routine', 'Tag the build on Tuesdays.', 's-contoso')
+  assert.equal(a.write('release-routine', 'Tag the build on Tuesdays, then post the changelog.', 's-pm'), id)
+  await sync(a, b)
+  // The peer never saw the first version, so its row has the id of the version it did see.
+  const peer = () => b.store.byName('release-routine')[0]!
+  assert.equal(peer().retiredAt, undefined)
+
+  retire(a, id, { by: 'tester@node-a' })
+  const r = await sync(a, b)
+  assert.notEqual(peer().retiredAt, undefined, 'retired on the peer')
+  const sent = fromNdjson(r.text).lines.flatMap((l) => (l.t === 'record' && l.r.kind === 'retirement' ? [l.r] : []))
+  assert.equal(sent.length, 1)
+  assert.equal(sent[0]!.hashes!.length, 1, 'only the shared version is named')
+  assert.equal(sent[0]!.withheld, 1)
+  assert.match(peer().retireWhy ?? '', /1 version\(s\) kept home on node-a/)
+
+  unretire(a, id, { by: 'tester@node-a' })
+  await sync(a, b)
+  assert.equal(peer().retiredAt, undefined, 'the unretirement is stripped the same way, and clears it')
+})
+
+test('a retirement naming a version still waiting for its writer waits with it, then both arrive and the row is retired', async () => {
+  const a = node('node-a')
+  const b = node('node-b')
+  a.roles.set('s-pm', ['pm'])
+  a.kinds.set('s-pm', { entrypoint: 'cli' })
+  a.kinds.set('s-new', { entrypoint: 'cli' })
+  const id = a.write('release-routine', 'Tag the build on Tuesdays.', 's-pm')
+  await sync(a, b)
+  // A newer version from a session comms cannot place yet: it waits, and so must the retirement.
+  a.write('release-routine', 'Tag the build on Tuesdays, then post the changelog.', 's-new')
+  retire(a, id, { by: 'tester@node-a' })
+  await sync(a, b)
+  assert.equal(b.store.get(id)!.retiredAt, undefined, 'not yet: its newest version is still waiting')
+  a.roles.set('s-new', ['pm'])
+  await sync(a, b)
+  assert.notEqual(b.store.get(id)!.retiredAt, undefined, 'retired once the version and the retirement both arrived')
+  assert.match(b.store.get(id)!.content, /changelog/)
 })
 
 test('a writer comms cannot name holds its memory back, without stopping what comes after; it goes once the writer is known', async () => {

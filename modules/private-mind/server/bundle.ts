@@ -29,7 +29,7 @@ import type { MindConfig } from './config.js'
 import type { Pointer, Writer } from './store.js'
 
 /** The parts of a journal record this module reads; the record itself travels untouched. */
-export type Rec = { kind: string; machine: string; seq: number; session?: string; scope?: string; syncClass?: string; slug?: string; content?: string; contentHash?: string; targetHash?: string; hashes?: string[] }
+export type Rec = { kind: string; machine: string; seq: number; session?: string; scope?: string; syncClass?: string; slug?: string; content?: string; contentHash?: string; targetHash?: string; hashes?: string[]; withheld?: number }
 export type Block = { machine: string; session: string; mseq: number; [k: string]: unknown }
 export type Line = { t: 'record'; r: Rec } | { t: 'pointer'; p: Pointer } | { t: 'block'; b: Block }
 export type HeldCode = 'local-role' | 'local-place' | 'waiting' | 'given-up' | 'secret-gate'
@@ -111,11 +111,25 @@ export const buildBundle = (o: BuildInput): { lines: Line[]; held: Held[]; kept:
       continue
     }
     if (TARGETED.has(r.kind)) {
-      // A retirement names every version of its memory: one kept home is enough to hold it.
-      const targets = r.targetHash ? [r.targetHash] : (r.hashes ?? [])
-      if (targets.some((h) => kept.has(h))) gap(r)
-      else if (targets.some((h) => waiting.has(h))) waitingFrom = Math.min(waitingFrom ?? Infinity, r.seq)
-      else lines.push({ t: 'record', r })
+      if (r.targetHash) {
+        // A tombstone or redaction names one memory: kept home, it goes as a gap.
+        if (kept.has(r.targetHash)) gap(r)
+        else if (waiting.has(r.targetHash)) waitingFrom = Math.min(waitingFrom ?? Infinity, r.seq)
+        else lines.push({ t: 'record', r })
+        continue
+      }
+      // A retirement or unretirement names every version. One still waiting for its writer holds it,
+      // or it would arrive before that version and leave it live. Versions kept home are left off,
+      // and the copy says how many, so peers act on the versions they can hold.
+      const hashes = r.hashes ?? []
+      if (hashes.some((h) => waiting.has(h))) {
+        waitingFrom = Math.min(waitingFrom ?? Infinity, r.seq)
+        continue
+      }
+      const sent = hashes.filter((h) => !kept.has(h))
+      if (!sent.length) gap(r)
+      else if (sent.length === hashes.length) lines.push({ t: 'record', r })
+      else lines.push({ t: 'record', r: { ...r, hashes: sent, withheld: (r.withheld ?? 0) + hashes.length - sent.length } })
       continue
     }
     if (r.kind !== 'memory') {

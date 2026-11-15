@@ -189,6 +189,8 @@ export type RetirementRecord = {
   by: string
   machine: string
   appendedAt: number
+  /** Versions left off this copy because they were kept home on the retiring node (private-mind sync). */
+  withheld?: number
 }
 
 /** Clears a retirement of the same hashes. The later of the two, by append time, wins. */
@@ -200,6 +202,7 @@ export type UnretirementRecord = {
   by: string
   machine: string
   appendedAt: number
+  withheld?: number
 }
 
 export type JournalRecord = MemoryRecord | TombstoneRecord | RedactionRecord | ConsolidationRecord | RetirementRecord | UnretirementRecord

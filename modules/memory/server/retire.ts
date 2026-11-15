@@ -25,7 +25,7 @@ const toRetirement = (r: RetirementRecord): Retirement => ({
   at: r.appendedAt,
   by: r.by,
   ...(r.supersededBy ? { supersededBy: r.supersededBy } : {}),
-  ...(r.why ? { why: r.why } : {}),
+  ...(r.why || r.withheld ? { why: [r.why, r.withheld ? `${r.withheld} version(s) kept home on ${r.machine}, not listed here` : ''].filter(Boolean).join('; ') } : {}),
 })
 
 /** Rebuild what the graph knows of retirements from the journal, and bring the rows in line. */
