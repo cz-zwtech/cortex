@@ -24,8 +24,8 @@ import path from 'node:path'
 import { discover } from '../core/discover.js'
 import { machineId } from '../core/machineId.js'
 import { dataRoot, meshDir, modulesDir, runScript, stateDir } from '../core/paths.js'
-import { EXIT_CONFLICT, isRunning, meshPort, readStatus, start, stop, unitText } from '../modules/comms/server/mesh/control.js'
-import { serve } from '../modules/comms/server/mesh/daemon.js'
+import { EXIT_CONFLICT, EXIT_LOCKED, isRunning, meshPort, ownedByUnit, readStatus, start, startProblem, stop, UNIT, unitFor, unitText } from '../modules/comms/server/mesh/control.js'
+import { DaemonLocked, serve } from '../modules/comms/server/mesh/daemon.js'
 import { MeshLog, registerDeclaredKinds } from '../modules/comms/server/mesh/log.js'
 import type { Accept } from '../modules/comms/server/mesh/router.js'
 import type { Intent } from '../modules/comms/server/mesh/nodes.js'
@@ -115,6 +115,10 @@ switch (cmd) {
     // Record kinds that modules flood, with their policies: declared in manifests, since the daemon hosts no modules.
     const found = await discover(modulesDir())
     for (const why of registerDeclaredKinds(found.found.map((m) => ({ module: m.manifest.name, kinds: m.manifest.meshKinds })))) console.error(`mesh: ${why}; ignored`)
+    // An enabled unit owns the daemon: one started beside it races the unit, and the mesh refuses one of the two.
+    if (unitFor(dir) === 'enabled' && !ownedByUnit(process.pid) && !process.argv.includes('--here')) {
+      die(`${UNIT} is enabled, so it runs the daemon: systemctl --user start ${UNIT} (or serve --here to run one outside it anyway)`)
+    }
     const bridge = new MeshLog(dir, node)
     const port = meshPort(dir)
     // On a gateway, its own mailboxes (gate:, gate-ctl:) are the gateway's to accept; every other one is comms'.
@@ -141,9 +145,13 @@ switch (cmd) {
         scan: (file, address) => (address.startsWith('gate') && gateway ? gateway.scanFile(file, address) : secretGate(file)),
         deliver: deliverFiles(bridge),
       },
-    }).catch((err) =>
-      die(`cannot serve on port ${port} (${err instanceof Error ? err.message : err}); set port in ${nodeConfigFile(dir)} or CKN_MESH_PORT to a free port`),
-    )
+    }).catch((err) => {
+      if (err instanceof DaemonLocked) {
+        console.error(`cortex-mesh: STOPPED, ${err.message}.`)
+        process.exit(EXIT_LOCKED)
+      }
+      return die(`cannot serve on port ${port} (${err instanceof Error ? err.message : err}); set port in ${nodeConfigFile(dir)} or CKN_MESH_PORT to a free port`)
+    })
     // A gateway node runs the gateway in this process, beside the mesh it serves (modules/gateway).
     // A delivered message that sits unseen because its target stopped listening: its sender hears it, once.
     const unseen = setInterval(() => {
@@ -178,7 +186,8 @@ switch (cmd) {
       break
     }
     const r = await start(dir, { wait: true })
-    if (r === 'failed') die(`the daemon did not come up; see ${path.join(dir, 'daemon.log')}`)
+    const problem = startProblem(r, dir)
+    if (problem) die(problem)
     console.log(r === 'already' ? 'mesh daemon already running' : 'mesh daemon started')
     break
   }
@@ -203,7 +212,8 @@ switch (cmd) {
       break
     }
     const r = await start(dir, { wait: true })
-    if (r === 'failed') die(`the daemon did not come back; see ${path.join(dir, 'daemon.log')}`)
+    const problem = startProblem(r, dir)
+    if (problem) die(problem)
     console.log('mesh daemon resumed')
     break
   }

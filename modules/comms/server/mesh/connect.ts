@@ -8,7 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { start, stop } from './control.js'
+import { start, stop, type StartResult } from './control.js'
 import { readNodeConfig, writeNodeConfig } from './nodeConfig.js'
 import { readPeers } from './peers.js'
 
@@ -50,5 +50,5 @@ export const migrateConnect = (dir: string): Migrated => {
 }
 
 /** Make the daemon match the setting: running when the node connects, stopped when it does not. */
-export const applyConnect = async (dir: string): Promise<'started' | 'already' | 'failed' | 'stopped' | 'not-running'> =>
+export const applyConnect = async (dir: string): Promise<StartResult | 'stopped' | 'not-running'> =>
   connects(dir) ? start(dir, { wait: true }) : stop(dir)
