@@ -36,8 +36,9 @@ import { exitOnHelp } from '../core/help.js'
 const USAGE = `cortex-memory: inspect and correct the memory graph
 
   status                 corpus size, quarantine depth, warnings
-  list [n]               most recent memories (default 10)
-  show <id|name>         one memory in full
+  list [n] [--all]       most recent memories (default 10); --all includes retired ones
+  show <id|name> [--history]
+                         one memory in full; --history lists its versions from the journal
   recall <query…>        run a query the way a prompt would, with the signals
   quarantine             memories held by the secret gate, and why
   unquarantine <hash>    drop a held memory without ingesting it
@@ -64,7 +65,14 @@ const USAGE = `cortex-memory: inspect and correct the memory graph
   context window <block id> [n]    a block with n blocks either side (default 3)
   context why <memory id|name>     the dialogue that produced a memory (its anchors)
   capture --anchors                anchor memories to the dialogue that wrote them, from captured transcripts
-  forget <id>            delete one memory
+  retire <id|name> [--superseded-by <id>] [--why <text>]
+                         take a memory out of recall, session context and standing, and keep it;
+                         its old text does not come back from a re-sweep or a peer. The usual tool
+  unretire <id|name>     bring a retired memory back
+  duplicates [--apply [--keep <id>[,<id>...]]]
+                         every name with more than one live row in its scope; --apply keeps the
+                         newest (or the --keep rows) and retires the rest, superseded by it
+  forget <id>            delete one memory, for text that must go (retire keeps it)
   protect <id> on|off    exempt from decay (or stop exempting)
   take-in [--dir <memory dir>] [--apply]
                          MEMORY.md: take each section's prose in as a memory file (rules headings
@@ -124,6 +132,47 @@ const need = <T>(id: string): T => {
 
 const short = (s: string, n = 90) => (s.length > n ? `${s.slice(0, n)}…` : s).replace(/\n/g, ' ')
 
+/** The value after a flag, if the flag is given. */
+const flagValue = (name: string): string | undefined => {
+  const i = rest.indexOf(name)
+  if (i < 0) return undefined
+  const v = rest[i + 1]
+  if (v === undefined || v.startsWith('--')) die(`${name} needs a value`)
+  return v
+}
+const VALUE_FLAGS = new Set(['--superseded-by', '--why', '--keep', '--trigger', '--explain'])
+/** The arguments that are not flags or flag values. */
+const positional = (): string[] => rest.filter((a, i) => !a.startsWith('--') && !VALUE_FLAGS.has(rest[i - 1] ?? ''))
+const timeOf = (ms: number) => new Date(ms).toISOString().slice(0, 16).replace('T', ' ') + 'Z'
+
+/** Who is acting, for a retirement's audit: the session's member when it has one, with the machine. */
+const actor = async (): Promise<string> => {
+  const session = process.env.CLAUDE_CODE_SESSION_ID
+  const roles = caps.get<(s: string) => Promise<{ member?: string }>>('comms.sessionRoles')
+  let member: string | undefined
+  if (session && roles) {
+    try {
+      member = (await roles(session)).member
+    } catch {
+      /* comms is optional: the session id still says who */
+    }
+  }
+  return `${member ?? (session ? `session ${session.slice(0, 8)}` : 'cli')}@${machineId()}`
+}
+
+type Row = { id: string; name: string; scope: string; machine: string; authoredAt: number; content: string; retiredAt?: number; retiredBy?: string; supersededBy?: string; retireWhy?: string }
+type RetireApi = {
+  resolve: (ref: string, retired?: boolean) => { memory: Row } | { error: string }
+  retire: (id: string, opts: { by: string; supersededBy?: string; why?: string }) => unknown
+  unretire: (id: string, opts: { by: string }) => { notHeld: number }
+  history: (id: string) => { version: number; at: number; machine: string; hash: string; description: string; current: boolean }[]
+  planDuplicates: (keep?: string[]) => { kept: Row[]; retire: Row[]; supersededBy: Row }[]
+  applyDuplicates: (keep: string[], opts: { by: string }) => number
+}
+const retiredLine = (m: Row): string =>
+  `retired: ${timeOf(m.retiredAt!)} by ${m.retiredBy}${m.supersededBy ? `; superseded by ${m.supersededBy}` : ''}${m.retireWhy ? `; why: ${m.retireWhy}` : ''}`
+const resolved = (r: { memory: Row } | { error: string }): Row => ('error' in r ? die(r.error) : r.memory)
+
 switch (verb) {
   case undefined:
   case 'help':
@@ -141,23 +190,23 @@ switch (verb) {
   }
 
   case 'list': {
-    const n = Number(rest[0] ?? 10)
-    if (!Number.isInteger(n) || n < 1) die('usage: cortex-memory list [n]   (n is how many; to find a memory by words use: recall <words>)')
-    const search = need<(term: string, limit?: number) => unknown[]>('memory.search')
+    const n = Number(positional()[0] ?? 10)
+    if (!Number.isInteger(n) || n < 1) die('usage: cortex-memory list [n] [--all]   (n is how many; to find a memory by words use: recall <words>)')
+    const search = need<(term: string, limit?: number, opts?: { retired?: boolean }) => unknown[]>('memory.search')
     // `search('')` is a LIKE on the empty string, which matches everything — the
     // one case where whole-query substring search is exactly what is wanted.
-    const rows = search('', n) as { memory?: { id: string; name: string; content: string } }[]
+    const rows = search('', n, { retired: rest.includes('--all') }) as { memory?: Row }[]
     if (!rows.length) out.push('no memories')
     for (const r of rows) {
-      const m = r.memory ?? (r as unknown as { id: string; name: string; content: string })
-      out.push(`${m.id}  ${m.name}`)
+      const m = r.memory ?? (r as unknown as Row)
+      out.push(`${m.id}  ${m.name}${m.retiredAt !== undefined ? '  [retired]' : ''}`)
       out.push(`    ${short(m.content)}`)
     }
     break
   }
 
   case 'show': {
-    const id = rest[0] ?? die('usage: cortex-memory show <id|name>')
+    const id = positional()[0] ?? die('usage: cortex-memory show <id|name> [--history]')
     const get = need<(id: string) => unknown>('memory.get')
     // By name too: the standing rules load as one line each, naming the rule, not its id.
     const named = () => {
@@ -167,9 +216,23 @@ switch (verb) {
     }
     const m = (get(id) ?? named()) as Record<string, unknown> | null
     if (!m) die(`no memory with id or name ${id}`)
+    const row = m as unknown as Row
+    if (rest.includes('--history')) {
+      out.push(`id: ${row.id}`)
+      out.push(`name: ${row.name}`)
+      if (row.retiredAt !== undefined) out.push(retiredLine(row))
+      const versions = need<RetireApi>('memory.retire').history(row.id)
+      out.push('')
+      if (!versions.length) out.push('no versions in the journal (a memory older than the journal, or adopted without one)')
+      for (const v of versions) {
+        out.push(`v${v.version}  ${timeOf(v.at)}  ${v.machine}  ${v.hash.slice(0, 12)}  ${short(v.description || '(no description)', 70)}${v.current ? '  (current)' : ''}`)
+      }
+      break
+    }
     for (const k of ['id', 'name', 'description', 'scope', 'shape', 'pinned', 'protected', 'machine']) {
       out.push(`${k}: ${String(m![k])}`)
     }
+    if (row.retiredAt !== undefined) out.push(retiredLine(row))
     out.push('')
     out.push(String(m!.content))
     break
@@ -226,6 +289,8 @@ switch (verb) {
         out.push(`  lexical candidate: ${e.seedRank ? `#${e.seedRank}` : 'no (no query word matched it)'}; seeds taken: ${e.seedK}; seeded: ${e.seeded ? 'yes' : 'no'}${e.reachedByEdge ? '; reached by an edge' : ''}`)
         out.push(`  score ${e.score?.toFixed(3)} (rank #${e.rank}): sim=${s.similarity?.toFixed(2) ?? 'n/a'} usage=${s.usageBonus.toFixed(2)} recency=${s.recencyBonus.toFixed(2)} scope=${s.scopeBonus} pin=${s.pinBonus} decay=${s.decayPenalty.toFixed(2)}`)
         if (e.collapsedInto) out.push(`  collapsed behind ${e.collapsedInto} as a near-duplicate`)
+        if (e.retired) out.push('  retired: never a candidate (cortex-memory show says why)')
+        if (e.shownAs) out.push(`  a newer row of the same name is shown instead: ${e.shownAs}`)
         if (e.cutBy) out.push(`  dropped by the cut: ${e.cutBy === 'floor' ? 'below the relevance floor' : 'past k'}`)
       }
     }
@@ -353,7 +418,7 @@ switch (verb) {
   }
 
   case 'sweep': {
-    const sweep = need<(dir: string, scope?: string) => { ingested: number; declined: number; cleared?: string[]; folded?: { source: string; into: string }[]; appendedTo?: { source: string; into: string }[]; heldAppends?: string[] }>(
+    const sweep = need<(dir: string, scope?: string) => { ingested: number; declined: number; cleared?: string[]; folded?: { source: string; into: string }[]; appendedTo?: { source: string; into: string }[]; heldAppends?: string[]; unrelated?: { name: string }[] }>(
       'memory.sweep',
     )
     const { memoryDirs, scopeForDir } = await import('../modules/memory/server/drive.js')
@@ -371,6 +436,9 @@ switch (verb) {
       for (const a of r.appendedTo ?? []) out.push(`  updated: text added below the stub in ${a.source} went into memory ${a.into}`)
       for (const h of r.heldAppends ?? []) out.push(`  held: text added below the stub in ${h} names no single memory; see the note in the file`)
       for (const c of r.cleared ?? []) out.push(`  quarantine cleared: ${c} (the file is gone)`)
+      for (const u of r.unrelated ?? []) {
+        out.push(`  updated \`${u.name}\`; the new text is unrelated to the previous version, which is in \`cortex-memory show ${u.name} --history\``)
+      }
     }
     const { logSweep } = await import('../modules/memory/server/sweepLog.js')
     const { consumeAllowed } = await import('../core/paths.js')
@@ -576,6 +644,63 @@ switch (verb) {
       } else die('usage: cortex-memory context search <words…> | window <block id> [n] | why <memory>')
     } finally {
       store.close()
+    }
+    break
+  }
+
+  case 'retire': {
+    const ref = positional()[0] ?? die('usage: cortex-memory retire <id|name> [--superseded-by <id>] [--why <text>]')
+    const api = need<RetireApi>('memory.retire')
+    const m = resolved(api.resolve(ref, false))
+    if (m.retiredAt !== undefined) die(`${m.id} is already retired (${retiredLine(m)})`)
+    const successorRef = flagValue('--superseded-by')
+    const successor = successorRef === undefined ? undefined : resolved(api.resolve(successorRef, false))
+    const why = flagValue('--why')
+    try {
+      api.retire(m.id, { by: await actor(), ...(successor ? { supersededBy: successor.id } : {}), ...(why ? { why } : {}) })
+    } catch (err) {
+      die(err instanceof Error ? err.message : String(err))
+    }
+    out.push(`retired ${m.id}${successor ? `, superseded by ${successor.id}` : ''}. It is kept; cortex-memory unretire ${m.id} brings it back`)
+    break
+  }
+
+  case 'unretire': {
+    const ref = positional()[0] ?? die('usage: cortex-memory unretire <id|name>')
+    const api = need<RetireApi>('memory.retire')
+    const m = resolved(api.resolve(ref, true))
+    if (m.retiredAt === undefined) die(`${m.id} is not retired`)
+    const { notHeld } = api.unretire(m.id, { by: await actor() })
+    out.push(`unretired ${m.id}`)
+    if (notHeld) out.push(`its retirement listed ${notHeld} version(s) not held here; they are cleared too, on the nodes that hold them`)
+    break
+  }
+
+  case 'duplicates': {
+    const api = need<RetireApi>('memory.retire')
+    const keep = (flagValue('--keep') ?? '').split(',').map((k) => k.trim()).filter(Boolean)
+    const apply = rest.includes('--apply')
+    const plan = api.planDuplicates(keep)
+    const grouped = new Set(plan.flatMap((g) => [...g.kept, ...g.retire].map((m) => m.id)))
+    const strays = keep.filter((k) => !grouped.has(k))
+    if (strays.length) die(`--keep names rows that are in no duplicate group: ${strays.join(', ')}`)
+    if (!plan.length) {
+      out.push('no duplicates: every name has one live row in its scope')
+      break
+    }
+    for (const g of plan) {
+      const rows = [...g.kept, ...g.retire].sort((a, b) => b.authoredAt - a.authoredAt)
+      out.push(`${g.supersededBy.name}  (scope ${g.supersededBy.scope}, ${rows.length} live rows)`)
+      for (const m of rows) {
+        const firstLine = m.content.split('\n').find((l) => l.trim()) ?? ''
+        out.push(`  ${g.kept.includes(m) ? 'keep  ' : 'retire'}  ${m.id}  ${m.machine}  ${timeOf(m.authoredAt)}  ${short(firstLine, 70)}`)
+      }
+    }
+    if (apply) {
+      const n = api.applyDuplicates(keep, { by: await actor() })
+      out.push(`retired ${n} row(s), each superseded by the row kept in its group`)
+    } else {
+      out.push(`dry run: ${plan.reduce((n, g) => n + g.retire.length, 0)} row(s) would be retired; add --apply (and --keep <id>[,<id>...] to keep other rows)`)
     }
     break
   }

@@ -107,7 +107,16 @@ CREATE TABLE IF NOT EXISTS memories (
 
   -- The entire input to contradiction detection.
   outcome       TEXT NOT NULL DEFAULT '',
-  outcome_text  TEXT NOT NULL DEFAULT ''
+  outcome_text  TEXT NOT NULL DEFAULT '',
+
+  -- Retired (server/retire.ts): kept, but out of recall, session context,
+  -- standing and rules. Set while the row's journal record is one a retirement
+  -- covers (retired_hashes), or by id for a row with no journal record.
+  -- Added after the first release: MemoryStore.applySchema adds them to older graphs.
+  retired_at    INTEGER,
+  retired_by    TEXT,
+  superseded_by TEXT,
+  retire_why    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_memories_scope  ON memories(scope);
@@ -369,4 +378,29 @@ CREATE TABLE IF NOT EXISTS constraint_lines (
   text      TEXT NOT NULL,
   keys      TEXT NOT NULL,
   PRIMARY KEY (memory_id, ord)
+);
+
+-- Journal hashes a retirement covers, derived from the journal's retirement and
+-- unretirement records (Journal.retiredHashes). Every version of a retired
+-- memory is here, so a peer re-sweeping an old version, or an old record
+-- arriving late, lands retired rather than reviving the memory.
+CREATE TABLE IF NOT EXISTS retired_hashes (
+  hash          TEXT PRIMARY KEY,
+  memory_id     TEXT NOT NULL,
+  retired_at    INTEGER NOT NULL,
+  retired_by    TEXT NOT NULL,
+  superseded_by TEXT,
+  why           TEXT
+);
+
+-- An update from the same file whose new text is unrelated to what it replaced:
+-- said in the sweep result and in the next session's context, since the old
+-- text is then only in the journal (cortex-memory show <name> --history).
+CREATE TABLE IF NOT EXISTS update_notes (
+  memory_id TEXT NOT NULL,
+  name      TEXT NOT NULL,
+  scope     TEXT NOT NULL,
+  at        INTEGER NOT NULL,
+  shown     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (memory_id, at)
 );

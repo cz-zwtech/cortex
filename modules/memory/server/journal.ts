@@ -171,7 +171,38 @@ export type ConsolidationRecord = {
   appendedAt: number
 }
 
-export type JournalRecord = MemoryRecord | TombstoneRecord | RedactionRecord | ConsolidationRecord
+/**
+ * A memory taken out of recall and kept (retire.ts). Unlike a tombstone it covers
+ * EVERY version's hash and is not bounded by sequence: a record of any of them,
+ * from any machine and at any time, lands retired. A version it does not cover
+ * is new text under the name, and is live.
+ */
+export type RetirementRecord = {
+  kind: 'retirement'
+  seq: number
+  /** The graph id, for provenance and for rows with no journal record. */
+  memoryId: string
+  hashes: string[]
+  supersededBy?: string
+  why?: string
+  /** Who retired it: a member or session, with the machine. */
+  by: string
+  machine: string
+  appendedAt: number
+}
+
+/** Clears a retirement of the same hashes. The later of the two, by append time, wins. */
+export type UnretirementRecord = {
+  kind: 'unretirement'
+  seq: number
+  memoryId: string
+  hashes: string[]
+  by: string
+  machine: string
+  appendedAt: number
+}
+
+export type JournalRecord = MemoryRecord | TombstoneRecord | RedactionRecord | ConsolidationRecord | RetirementRecord | UnretirementRecord
 
 export const hashContent = (content: string): string =>
   createHash('sha256').update(content, 'utf-8').digest('hex')
@@ -194,7 +225,7 @@ export const isGap = (r: unknown): r is GapLine => {
 }
 export type VersionVector = Record<string, number>
 
-const KINDS = new Set(['memory', 'tombstone', 'redaction', 'consolidation'])
+const KINDS = new Set(['memory', 'tombstone', 'redaction', 'consolidation', 'retirement', 'unretirement'])
 /** A record from elsewhere, checked field by field before it is kept. */
 export const isJournalRecord = (r: unknown): r is JournalRecord => {
   const x = r as Record<string, unknown>
@@ -202,6 +233,8 @@ export const isJournalRecord = (r: unknown): r is JournalRecord => {
   if (typeof x.appendedAt !== 'number') return false
   if (x.kind === 'memory') return typeof x.content === 'string' && typeof x.contentHash === 'string' && typeof x.scope === 'string' && typeof x.source === 'string'
   if (x.kind === 'tombstone' || x.kind === 'redaction') return typeof x.targetHash === 'string'
+  if (x.kind === 'retirement' || x.kind === 'unretirement')
+    return typeof x.memoryId === 'string' && typeof x.by === 'string' && Array.isArray(x.hashes) && x.hashes.every((h) => typeof h === 'string')
   return typeof x.op === 'string'
 }
 
@@ -453,6 +486,32 @@ export class Journal {
       seq: 0,
       appendedAt: input.appendedAt ?? Date.now(),
     })
+  }
+
+  appendRetirement(input: Omit<RetirementRecord, 'kind' | 'seq' | 'appendedAt' | 'machine'> & { appendedAt?: number }): RetirementRecord {
+    return this.#append<RetirementRecord>({ ...input, kind: 'retirement', seq: 0, machine: this.#machine, appendedAt: input.appendedAt ?? Date.now() })
+  }
+
+  appendUnretirement(input: Omit<UnretirementRecord, 'kind' | 'seq' | 'appendedAt' | 'machine'> & { appendedAt?: number }): UnretirementRecord {
+    return this.#append<UnretirementRecord>({ ...input, kind: 'unretirement', seq: 0, machine: this.#machine, appendedAt: input.appendedAt ?? Date.now() })
+  }
+
+  /**
+   * Every hash a retirement now covers, with the retirement that covers it. Retirements and
+   * unretirements from every machine are taken in append-time order, so the latest says.
+   */
+  retiredHashes(): Map<string, RetirementRecord> {
+    const changes: (RetirementRecord | UnretirementRecord)[] = []
+    for (const r of [...this.read(), ...this.peerRecords()]) if (r.kind === 'retirement' || r.kind === 'unretirement') changes.push(r)
+    changes.sort((a, b) => a.appendedAt - b.appendedAt || (a.machine === b.machine ? a.seq - b.seq : 0))
+    const covered = new Map<string, RetirementRecord>()
+    for (const r of changes) {
+      for (const h of r.hashes) {
+        if (r.kind === 'retirement') covered.set(h, r)
+        else covered.delete(h)
+      }
+    }
+    return covered
   }
 
   /**

@@ -25,6 +25,7 @@
  * THE LADDER (first hit wins)
  *
  *   0   declared graph id, alias-resolved and CORROBORATED     → update
+ *   1   declared slug in scope, from the SAME SOURCE FILE      → update, whatever the text
  *   1   declared slug in scope, content RELATED                → update
  *   1c  declared slug in scope, content UNRELATED, any machine → keep both, link
  *   1x  declared slug in scope, different machine lineage      → keep both, link
@@ -39,6 +40,14 @@
  * discriminator is CONTENT RELATEDNESS, not machine lineage — which collapses
  * 1, 1c and 1x into one rule at different distances: same slug plus related
  * content is an update; same slug plus unrelated content is two memories.
+ *
+ * EXCEPT FROM THE SAME FILE. One name in one scope from one file is one memory:
+ * a stub rewritten in place with a long new section scores under the floor, and
+ * kept both every time (four copies of one note in a day). Two sessions in
+ * one project write the same path too, so this gives up the graph's protection of
+ * the first session's text for the journal's: every version stays a record
+ * (`show <name> --history`), and an update whose text is unrelated to what it
+ * replaced is flagged (`unrelated`) so the sweep and the next session say so.
  *
  * WHAT RUNG 2 IS FOR, AND ONLY THIS: crash-retry idempotency. A session
  * re-saving from compacted context REGENERATES PROSE; it does not replay bytes,
@@ -57,6 +66,7 @@
  * decides what to show.
  */
 
+import { hashContent } from './journal.js'
 import type { Memory } from './types.js'
 import type { MemoryStore } from './store.js'
 
@@ -77,6 +87,10 @@ export type ReconcileDecision = {
    * is what lets the guards afford to be conservative.
    */
   settleable?: boolean
+  /** A same-file update whose new text is unrelated to the old, or too short to compare. Said, never silent. */
+  unrelated?: boolean
+  /** An update from an older version than the row holds: consumed and kept in the journal as history, the row untouched. */
+  older?: boolean
 }
 
 export type ReconcileInput = {
@@ -96,6 +110,12 @@ export type ReconcileInput = {
    * body hash leaves out, so it never folds by body text into another record.
    */
   isRule?: boolean
+  /** The file the text came from. Same file plus same slug is an update (rung 1). */
+  source?: string
+  /** The journal record's hash (full text): what an unchanged rewrite shares with its row. */
+  journalHash?: string
+  /** When the text was written: an older version from the same file never replaces a newer row. */
+  authoredAt?: number
   /**
    * Imports (vault, team-mind) NEVER enter at rung 0 or 1. A foreign corpus
    * declaring an id is asserting ITS identity space, not ours, so imports
@@ -286,6 +306,15 @@ const corroborate = (
   return { ok: false, how: 'uncorroborated' }
 }
 
+/**
+ * Whether a row came from the file this text came from. A row with no recorded source counts
+ * when it is from this machine: otherwise its first rewrite would link once more, the
+ * duplicate this rule exists to stop. The update records the source, and the strict rule
+ * applies from then on.
+ */
+const fromSameSource = (m: Memory, input: ReconcileInput): boolean =>
+  !!input.source && (m.source === input.source || (m.source === '' && m.machine === input.machine))
+
 export const reconcile = (input: ReconcileInput, deps: ReconcileDeps): ReconcileDecision => {
   const { store } = deps
   const est = estimatorOf(deps)
@@ -327,7 +356,9 @@ export const reconcile = (input: ReconcileInput, deps: ReconcileDeps): Reconcile
   if (input.slug && !input.imported) {
     const matches = store.bySlug(input.scope, input.slug)
     if (matches.length) {
-      const identical = matches.find((m) => m.contentHash === input.contentHash)
+      // Against the row's journal hash: the row's own content_hash covers name and description
+      // as well as the body, so it never equalled any input hash and this check never fired.
+      const identical = input.journalHash ? matches.find((m) => store.journalHashOf(m.id) === input.journalHash) : undefined
       if (identical) {
         return { rung: '1', action: 'update', target: identical.id, note: 'slug, unchanged' }
       }
@@ -336,9 +367,29 @@ export const reconcile = (input: ReconcileInput, deps: ReconcileDeps): Reconcile
       // when, do or why changed. Judged by text it would become a second rule beside the old one
       // (say, a rule rewritten from `when: tool:Write` to `when: always`).
       if (input.isRule) {
-        const rules = new Set(store.rules().map((r) => r.id))
-        const same = matches.find((m) => rules.has(m.id))
+        const same = matches.find((m) => store.hasRule(m.id))
         if (same) return { rung: '1', action: 'update', target: same.id, note: 'slug, the same rule rewritten' }
+      }
+
+      const sameSource = matches.filter((m) => fromSameSource(m, input))
+      if (sameSource.length) {
+        // Several only where earlier rewrites linked: the live one, else the newest, is the memory.
+        const retired = (m: Memory) => (m.retiredAt === undefined ? 0 : 1)
+        const target = [...sameSource].sort((a, b) => retired(a) - retired(b) || b.authoredAt - a.authoredAt)[0]!
+        // A stale stub re-swept, or an old record arriving late: replacing the row would put old
+        // text over new, and an old version a retirement covers would retire the live memory.
+        if (input.authoredAt !== undefined && input.authoredAt < target.authoredAt) {
+          return { rung: '1', action: 'update', target: target.id, note: 'slug, same file, older than the row', older: true }
+        }
+        // By content too, whatever the clock says: a copy or a save of old text gets a fresh mtime. A body
+        // the row consumed before, and does not hold now, is an earlier version; the same body as now is a
+        // frontmatter edit (dropping kind: rule, say), which is new.
+        if (store.consumedAs(input.contentHash) === target.id && hashContent(target.content) !== input.contentHash) {
+          return { rung: '1', action: 'update', target: target.id, note: 'slug, same file, an earlier version of the row', older: true }
+        }
+        const score = similarity(target.content, input.content)
+        if (score !== null && score >= relatedFloor) return { rung: '1', action: 'update', target: target.id, note: 'slug, same file' }
+        return { rung: '1', action: 'update', target: target.id, note: 'slug, same file, new text unrelated to the previous version', unrelated: true }
       }
 
       // Score EVERY candidate; the best above the floor is the update target.

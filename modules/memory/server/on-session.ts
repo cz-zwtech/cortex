@@ -193,6 +193,7 @@ export const onSessionStart = (payload: unknown, ctx?: ModuleCtx) => {
     if (built.included.length) {
       recordSurfacing(new MemoryStore(ctx.db), built.included, sessionId, Date.now())
     }
+    if (built.updateNotes.length) new MemoryStore(ctx.db).markUpdateNotesShown(built.updateNotes)
 
     // Injection is a selection, so the session also needs to know it can ASK.
     const hint = recallHint(built.included.length, new MemoryStore(ctx.db).countRecallable())

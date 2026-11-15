@@ -41,6 +41,7 @@ import { classify, type SessionInfo } from './classify.js'
 import { bodyOf, type ConsumeTicket } from './consume.js'
 import { hashContent, type Journal, type MemoryRecord } from './journal.js'
 import { reconcile, type ReconcileDecision, type ReconcileDeps } from './reconcile.js'
+import { adoptRetirements } from './retire.js'
 import { ruleOf } from './rules.js'
 import { frontmatterOf } from './frontmatter.js'
 import { scanForSecrets, type SecretFinding } from '../../../core/secrets.js'
@@ -74,6 +75,8 @@ export type Receipt = {
   action: ReconcileDecision['action']
   note: string
   settleable?: boolean
+  /** An update from the same file whose text is unrelated to the version it replaced. */
+  unrelated?: boolean
 }
 
 export type IngestResult =
@@ -142,6 +145,9 @@ export const ingest = (input: IngestInput, deps: IngestDeps): IngestResult => {
       scope: input.scope,
       content: input.body,
       contentHash: bodyHash,
+      source: input.source,
+      journalHash: record.contentHash,
+      authoredAt: input.authoredAt,
       machine: input.machine,
       sessionId: input.sessionId,
       isRule: ruleOf(input.content) !== null,
@@ -151,6 +157,8 @@ export const ingest = (input: IngestInput, deps: IngestDeps): IngestResult => {
 
   // ── 4. Apply to the graph. ────────────────────────────────────────────────
   const id = applyDecision(decision, input, bodyHash, record.contentHash, deps, now)
+  // The previous text is now only in the journal: the next session is told, not only this sweep.
+  if (decision.unrelated) store.noteUnrelatedUpdate({ memoryId: id, name: input.slug, scope: input.scope, at: now() })
   // Which session wrote it: what a compacted session gets back as its own decisions (restore.ts).
   if (input.sessionId) {
     try {
@@ -174,6 +182,7 @@ export const ingest = (input: IngestInput, deps: IngestDeps): IngestResult => {
     action: decision.action,
     note: decision.note,
     ...(decision.settleable ? { settleable: true } : {}),
+    ...(decision.unrelated ? { unrelated: true } : {}),
   }
 
   // The TICKET, minted here and only here: this content reached the journal AND
@@ -226,11 +235,16 @@ const applyDecision = (
     } as never)
     store.setRule(id, ruleOf(input.content))
     store.recordConsume(bodyHash, id, now())
+    store.applyRetirement(id)
     return id
   }
 
   switch (decision.action) {
     case 'update':
+      if (decision.older) {
+        store.recordConsume(bodyHash, decision.target!, now())
+        return decision.target!
+      }
       return write(decision.target!)
 
     case 'fold': {
@@ -277,6 +291,8 @@ export type AdoptReport = {
   materialized: string[]
   /** Graph rows removed by adopted tombstones and redactions. */
   removed: number
+  /** Retirement and unretirement records adopted. */
+  retirements: number
   /** Findings become a redaction SUGGESTION, surfaced in status. Never a block. */
   suggestions: SecretFinding[]
 }
@@ -297,8 +313,12 @@ export type AdoptReport = {
 export const adoptRecords = (records: unknown[], deps: IngestDeps): AdoptReport => {
   const now = deps.now ?? Date.now
   const { added, rejected } = deps.journal.adoptRecords(records)
-  const report: AdoptReport = { added: added.length, rejected, materialized: [], removed: 0, suggestions: [] }
+  const report: AdoptReport = { added: added.length, rejected, materialized: [], removed: 0, retirements: 0, suggestions: [] }
   if (!added.length) return report
+  // Retirements first, so a memory record arriving in the same batch as its retirement lands retired.
+  const retirements = added.filter((r) => r.kind === 'retirement' || r.kind === 'unretirement')
+  adoptRetirements(retirements, deps)
+  report.retirements = retirements.length
   const live = deps.journal.replay()
   const liveIds = new Set(live.map((r) => `${r.machine}:${r.seq}`))
   const liveHashes = new Set(live.map((r) => r.contentHash))
@@ -340,7 +360,18 @@ export const materialize = (record: MemoryRecord, deps: IngestDeps, now: () => n
     ...(record.session ? { sessionId: record.session } : {}),
   }
   const decision = reconcile(
-    { slug: input.slug, scope, content: body, contentHash: bodyHash, machine: record.machine, sessionId: record.session, isRule: ruleOf(record.content) !== null },
+    {
+      slug: input.slug,
+      scope,
+      content: body,
+      contentHash: bodyHash,
+      source: input.source,
+      journalHash: record.contentHash,
+      authoredAt: record.authoredAt,
+      machine: record.machine,
+      sessionId: record.session,
+      isRule: ruleOf(record.content) !== null,
+    },
     deps,
   )
   const id = applyDecision(decision, input, bodyHash, record.contentHash, deps, now)

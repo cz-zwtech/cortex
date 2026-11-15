@@ -23,6 +23,7 @@ import { ContextStore } from './context/store.js'
 import { contextStorePath } from './context/hooks.js'
 import { registerClassifier, type Classifier } from './classify.js'
 import { adoptRecords } from './ingest.js'
+import { applyDuplicates, history, planDuplicates, resolveMemory, retire, syncRetirements, unretire, type RetireOptions } from './retire.js'
 import { MemoryStore, hashContent, type MemoryInput } from './store.js'
 import { indexSubjects } from './subjects.js'
 import { frontmatterOf } from './frontmatter.js'
@@ -68,6 +69,14 @@ const mod: CortexModule = {
       )
     }
 
+    // Retired state is derived from the journal: a graph restored from a backup, or written by an
+    // older version, converges here.
+    try {
+      syncRetirements({ store, journal })
+    } catch (err) {
+      ctx.log(`retirements not synced from the journal: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
     const integrity = journal.integrity()
     if (integrity.length) {
       // Mid-segment corruption. Loud, because the alternative is a disk quietly
@@ -109,10 +118,10 @@ const mod: CortexModule = {
      * already discarded. `collapseThenTake` exists so this cannot be composed
      * the other way by accident.
      */
-    ctx.capabilities.provide('memory.search', (term: string, limit = 20) => {
+    ctx.capabilities.provide('memory.search', (term: string, limit = 20, opts: { retired?: boolean } = {}) => {
       // Over-fetch deliberately: collapse removes rows, so asking for exactly
       // `limit` would return fewer than requested whenever anything collapsed.
-      const raw = store!.search(term, limit * 4)
+      const raw = store!.search(term, limit * 4, opts)
       const candidates: Candidate[] = raw.map((m, i) => ({ memory: m, score: 1 - i / raw.length }))
       return collapseThenTake(candidates, limit)
     })
@@ -151,6 +160,29 @@ const mod: CortexModule = {
       return r
     })
 
+    // Retire: out of recall and kept (retire.ts). Rules of a retired memory stop applying, so rules.md follows.
+    const deps = () => ({ store: store!, journal: journal! })
+    ctx.capabilities.provide('memory.retire', {
+      resolve: (ref: string, retired = false) => resolveMemory(store!, ref, retired),
+      retire: (id: string, opts: RetireOptions) => {
+        const r = retire(deps(), id, opts)
+        refreshRules()
+        return r
+      },
+      unretire: (id: string, opts: { by: string }) => {
+        const r = unretire(deps(), id, opts)
+        refreshRules()
+        return r
+      },
+      history: (id: string) => history(deps(), id),
+      planDuplicates: (keep: string[] = []) => planDuplicates(store!, keep),
+      applyDuplicates: (keep: string[], opts: { by: string }) => {
+        const n = applyDuplicates(deps(), planDuplicates(store!, keep), opts)
+        if (n) refreshRules()
+        return n
+      },
+    })
+
     // Journal records of this machine the graph lacks (cortex-memory verify); repair writes them in.
     ctx.capabilities.provide('memory.verify', (opts?: { repair?: boolean }) => {
       const r = verify(store!, journal!, machineId(), opts)
@@ -163,7 +195,7 @@ const mod: CortexModule = {
     ctx.capabilities.provide('memory.journalStream', (since: VersionVector = {}) => [...journal!.stream(since)])
     ctx.capabilities.provide('memory.journalAdopt', (records: unknown[]) => {
       const r = adoptRecords(records, { store: store!, journal: journal! })
-      if (r.materialized.length || r.removed) refreshRules()
+      if (r.materialized.length || r.removed || r.retirements) refreshRules()
       return r
     })
     ctx.capabilities.provide('memory.classifier', (fn: Classifier) => registerClassifier(fn))

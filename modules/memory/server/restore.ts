@@ -32,7 +32,7 @@ export const buildRestore = (store: MemoryStore, dataDir: string, session: strin
     store
       .observedInto(session, [rel])
       .map((e) => store.get(e.src))
-      .filter((m): m is Memory => !!m)
+      .filter((m): m is Memory => !!m && m.retiredAt === undefined)
   const wrote = pick('edited_in')
   const threads = wrote.filter((m) => m.shape === 'thread').slice(0, PER_SECTION)
   const decisions = wrote.filter((m) => m.shape !== 'thread').slice(0, PER_SECTION)

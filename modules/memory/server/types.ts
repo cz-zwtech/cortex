@@ -61,6 +61,11 @@ export type Memory = {
   ingestedAt: number
   outcome: string
   outcomeText: string
+  /** Set while retired (retire.ts): kept, shown by id, out of recall, context, standing and rules. */
+  retiredAt?: number
+  retiredBy?: string
+  supersededBy?: string
+  retireWhy?: string
 }
 
 export type Hub = { id: string; kind: HubKind; name: string }

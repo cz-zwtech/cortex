@@ -42,6 +42,9 @@ export type MemoryInput = Omit<Memory, 'contentHash' | 'ingestedAt'> & {
   ingestedAt?: number
 }
 
+/** What a retirement says about a memory: who retired it, when, why, and what replaced it. */
+export type Retirement = { memoryId: string; at: number; by: string; supersededBy?: string; why?: string }
+
 export type UpsertOutcome = {
   id: string
   /** 'created' | 'updated' | 'unchanged' — callers report this; silence is wrong. */
@@ -65,6 +68,11 @@ export class MemoryStore {
   static applySchema(db: Database.Database, schemaPath?: string): void {
     const file = schemaPath ?? path.join(import.meta.dirname, '..', 'schema.sql')
     db.exec(fs.readFileSync(file, 'utf-8'))
+    const cols = new Set((db.prepare('PRAGMA table_info(memories)').all() as { name: string }[]).map((c) => c.name))
+    if (!cols.has('retired_at')) db.exec('ALTER TABLE memories ADD COLUMN retired_at INTEGER')
+    if (!cols.has('retired_by')) db.exec('ALTER TABLE memories ADD COLUMN retired_by TEXT')
+    if (!cols.has('superseded_by')) db.exec('ALTER TABLE memories ADD COLUMN superseded_by TEXT')
+    if (!cols.has('retire_why')) db.exec('ALTER TABLE memories ADD COLUMN retire_why TEXT')
   }
 
   // ── subjects: people and titles memories state (entities.ts) ──────────────
@@ -115,7 +123,7 @@ export class MemoryStore {
       this.#db
         .prepare(
           `SELECT c.memory_id, c.ord, c.text, c.keys, m.name, m.scope, m.source, m.authored_at
-           FROM constraint_lines c JOIN memories m ON m.id = c.memory_id`,
+           FROM constraint_lines c JOIN memories m ON m.id = c.memory_id WHERE m.retired_at IS NULL`,
         )
         .all() as { memory_id: string; ord: number; text: string; keys: string; name: string; scope: string; source: string; authored_at: number }[]
     ).map((r) => ({ memoryId: r.memory_id, ord: r.ord, text: r.text, keys: r.keys.split(' ').filter(Boolean), name: r.name, scope: r.scope, source: r.source, authoredAt: r.authored_at }))
@@ -134,7 +142,9 @@ export class MemoryStore {
     if (!keys.length) return []
     const like = keys.map(() => "(' ' || roles || ' ') LIKE ?").join(' OR ')
     return (
-      this.#db.prepare(`SELECT memory_id, name, title FROM people WHERE ${like}`).all(...keys.map((k) => `% ${k} %`)) as {
+      this.#db
+        .prepare(`SELECT memory_id, name, title FROM people WHERE (${like}) AND memory_id NOT IN (SELECT id FROM memories WHERE retired_at IS NOT NULL)`)
+        .all(...keys.map((k) => `% ${k} %`)) as {
         memory_id: string
         name: string
         title: string
@@ -323,7 +333,7 @@ export class MemoryStore {
   }
 
   standing(): Memory[] {
-    return (this.#db.prepare('SELECT * FROM memories WHERE pinned = 1 ORDER BY name').all() as Record<string, unknown>[]).map((r) => this.#toMemory(r))
+    return (this.#db.prepare('SELECT * FROM memories WHERE pinned = 1 AND retired_at IS NULL ORDER BY name').all() as Record<string, unknown>[]).map((r) => this.#toMemory(r))
   }
 
   /** Set the generic decay-exemption flag. Other modules reach this via a capability. */
@@ -332,12 +342,14 @@ export class MemoryStore {
       .changes > 0
   }
 
-  search(term: string, limit = 20): Memory[] {
+  /** Substring search, newest first. Retired memories only with `retired: true` (list --all). */
+  search(term: string, limit = 20, opts: { retired?: boolean } = {}): Memory[] {
     const like = `%${term.replace(/[%_\\]/g, (c) => `\\${c}`)}%`
     const rows = this.#db
       .prepare(
         `SELECT * FROM memories
-         WHERE name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\'
+         WHERE (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')
+         ${opts.retired ? '' : 'AND retired_at IS NULL'}
          ORDER BY authored_at DESC LIMIT ?`,
       )
       .all(like, like, like, limit) as Record<string, unknown>[]
@@ -364,7 +376,7 @@ export class MemoryStore {
     const facetLike = likes.map(() => "h.name LIKE ? ESCAPE '\\'").join(' OR ')
     const rows = this.#db
       .prepare(
-        `SELECT * FROM memories WHERE authorship != 'extracted' AND ((${where}) OR id IN (
+        `SELECT * FROM memories WHERE authorship != 'extracted' AND retired_at IS NULL AND ((${where}) OR id IN (
            SELECT e.src FROM derived_edges e JOIN hubs h ON h.id = e.dst
            WHERE h.kind = 'facet' AND e.rel IN ('focus','about') AND (${facetLike})))`,
       )
@@ -398,7 +410,7 @@ export class MemoryStore {
     return (
       this.#db
         .prepare(
-          `SELECT count(*) c FROM memories WHERE authorship != 'extracted'
+          `SELECT count(*) c FROM memories WHERE authorship != 'extracted' AND retired_at IS NULL
            AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')`,
         )
         .get(like, like, like) as { c: number }
@@ -408,7 +420,7 @@ export class MemoryStore {
   /** Memories recall can return: everything but extracted text. */
   countRecallable(): number {
     return (
-      this.#db.prepare("SELECT count(*) c FROM memories WHERE authorship != 'extracted'").get() as { c: number }
+      this.#db.prepare("SELECT count(*) c FROM memories WHERE authorship != 'extracted' AND retired_at IS NULL").get() as { c: number }
     ).c
   }
 
@@ -430,7 +442,7 @@ export class MemoryStore {
    */
   recent(scope: string, limit: number): Memory[] {
     const rows = this.#db
-      .prepare('SELECT * FROM memories WHERE scope = ? ORDER BY authored_at DESC LIMIT ?')
+      .prepare('SELECT * FROM memories WHERE scope = ? AND retired_at IS NULL ORDER BY authored_at DESC LIMIT ?')
       .all(scope, limit) as Record<string, unknown>[]
     return rows.map((r) => this.#toMemory(r))
   }
@@ -497,6 +509,11 @@ export class MemoryStore {
 
   declaredEdges(src: string): DeclaredEdge[] {
     return this.#db.prepare('SELECT * FROM declared_edges WHERE src = ?').all(src) as DeclaredEdge[]
+  }
+
+  /** Add one declared edge without touching the others (setDeclaredEdges replaces them all). */
+  addDeclaredEdge(e: DeclaredEdge): void {
+    this.#db.prepare('INSERT OR REPLACE INTO declared_edges (src, dst, rel, label) VALUES (?,?,?,?)').run(e.src, e.dst, e.rel, e.label ?? '')
   }
 
   inboundDeclared(dst: string): DeclaredEdge[] {
@@ -587,7 +604,7 @@ export class MemoryStore {
   withoutFacets(limit: number): Memory[] {
     const rows = this.#db
       .prepare(
-        `SELECT * FROM memories m WHERE authorship != 'extracted'
+        `SELECT * FROM memories m WHERE authorship != 'extracted' AND retired_at IS NULL
          AND NOT EXISTS (SELECT 1 FROM derived_edges e WHERE e.src = m.id AND e.rel = 'focus')
          ORDER BY ingested_at LIMIT ?`,
       )
@@ -834,14 +851,104 @@ export class MemoryStore {
       .get(link, `%/${link}.md`)
   }
 
-  /** Every rule, with its memory's name. */
+  /** Whether a memory is a rule, retired or not. */
+  hasRule(id: string): boolean {
+    return !!this.#db.prepare('SELECT 1 FROM rules WHERE id = ?').get(id)
+  }
+
+  /** Every rule of a live memory, with its memory's name. */
   rules(): Rule[] {
     const rows = this.#db
       .prepare<[], { id: string; name: string; fields: string; authored_at: number }>(
-        'SELECT r.id, m.name, r.fields, m.authored_at FROM rules r JOIN memories m ON m.id = r.id ORDER BY m.name',
+        'SELECT r.id, m.name, r.fields, m.authored_at FROM rules r JOIN memories m ON m.id = r.id WHERE m.retired_at IS NULL ORDER BY m.name',
       )
       .all()
     return rows.map((r) => ({ id: r.id, name: r.name, ...(JSON.parse(r.fields) as RuleFields), since: r.authored_at }))
+  }
+
+  // ── retirement (retire.ts) ─────────────────────────────────────────────────
+
+  /** Mark one row retired, or clear it with `null`. */
+  setRetired(id: string, r: Retirement | null): boolean {
+    return (
+      this.#db
+        .prepare('UPDATE memories SET retired_at = ?, retired_by = ?, superseded_by = ?, retire_why = ? WHERE id = ?')
+        .run(r?.at ?? null, r?.by ?? null, r?.supersededBy ?? null, r?.why ?? null, id).changes > 0
+    )
+  }
+
+  /** The journal hashes retirements cover, replaced whole: derived from the journal, never edited in place. */
+  setRetiredHashes(entries: { hash: string; retirement: Retirement }[]): void {
+    this.#db.transaction(() => {
+      this.#db.prepare('DELETE FROM retired_hashes').run()
+      const put = this.#db.prepare('INSERT OR REPLACE INTO retired_hashes (hash, memory_id, retired_at, retired_by, superseded_by, why) VALUES (?,?,?,?,?,?)')
+      for (const { hash, retirement: r } of entries) put.run(hash, r.memoryId, r.at, r.by, r.supersededBy ?? null, r.why ?? null)
+    })()
+  }
+
+  retirementCovering(journalHash: string): Retirement | undefined {
+    const row = this.#db.prepare('SELECT * FROM retired_hashes WHERE hash = ?').get(journalHash) as Record<string, unknown> | undefined
+    if (!row) return undefined
+    return {
+      memoryId: row.memory_id as string,
+      at: row.retired_at as number,
+      by: row.retired_by as string,
+      ...(row.superseded_by ? { supersededBy: row.superseded_by as string } : {}),
+      ...(row.why ? { why: row.why as string } : {}),
+    }
+  }
+
+  /**
+   * A row is retired exactly while its journal record is covered. A new version (a hash no
+   * retirement covers) clears it; an old version written again keeps or makes it retired.
+   * A row with no journal record keeps whatever was set on it by id.
+   */
+  applyRetirement(id: string): void {
+    const hash = this.journalHashOf(id)
+    if (hash) this.setRetired(id, this.retirementCovering(hash) ?? null)
+  }
+
+  /** Bring every row with a journal record in line with retired_hashes. */
+  syncRetiredRows(): void {
+    const ids = this.#db
+      .prepare('SELECT id FROM memories WHERE journal_hash IS NOT NULL AND (retired_at IS NOT NULL OR journal_hash IN (SELECT hash FROM retired_hashes))')
+      .all() as { id: string }[]
+    for (const { id } of ids) this.applyRetirement(id)
+  }
+
+  /** Every (scope, name) with more than one live row, each group newest authored first. */
+  duplicateGroups(): Memory[][] {
+    const keys = this.#db
+      .prepare(
+        `SELECT scope, name FROM memories WHERE retired_at IS NULL AND authorship != 'extracted' AND name != ''
+         GROUP BY scope, name HAVING count(*) > 1 ORDER BY scope, name`,
+      )
+      .all() as { scope: string; name: string }[]
+    return keys.map(({ scope, name }) =>
+      this.bySlug(scope, name)
+        .filter((m) => m.retiredAt === undefined && m.authorship !== 'extracted')
+        .sort((a, b) => b.authoredAt - a.authoredAt),
+    )
+  }
+
+  // ── update notes: a same-file update whose text is unrelated to the version it replaced ──
+
+  noteUnrelatedUpdate(n: { memoryId: string; name: string; scope: string; at: number }): void {
+    this.#db.prepare('INSERT OR IGNORE INTO update_notes (memory_id, name, scope, at) VALUES (?,?,?,?)').run(n.memoryId, n.name, n.scope, n.at)
+  }
+
+  /** Notes no session has been shown yet, oldest first. */
+  pendingUpdateNotes(): { memoryId: string; name: string; scope: string; at: number }[] {
+    return (
+      this.#db.prepare('SELECT memory_id, name, scope, at FROM update_notes WHERE shown = 0 ORDER BY at').all() as { memory_id: string; name: string; scope: string; at: number }[]
+    ).map((r) => ({ memoryId: r.memory_id, name: r.name, scope: r.scope, at: r.at }))
+  }
+
+  markUpdateNotesShown(notes: { memoryId: string; at: number }[]): void {
+    const mark = this.#db.prepare('UPDATE update_notes SET shown = 1 WHERE memory_id = ? AND at = ?')
+    this.#db.transaction(() => {
+      for (const n of notes) mark.run(n.memoryId, n.at)
+    })()
   }
 
   // ── quarantine ─────────────────────────────────────────────────────────────
@@ -1013,6 +1120,14 @@ export class MemoryStore {
       ingestedAt: r.ingested_at as number,
       outcome: r.outcome as string,
       outcomeText: r.outcome_text as string,
+      ...(r.retired_at != null
+        ? {
+            retiredAt: r.retired_at as number,
+            retiredBy: (r.retired_by as string | null) ?? '',
+            ...(r.superseded_by ? { supersededBy: r.superseded_by as string } : {}),
+            ...(r.retire_why ? { retireWhy: r.retire_why as string } : {}),
+          }
+        : {}),
     }
   }
 }

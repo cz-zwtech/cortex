@@ -164,14 +164,15 @@ test('a retry of identical text produces no second node', () => {
   assert.equal(store.count(), 1)
 })
 
-test('an unrelated fact under the same slug keeps BOTH', () => {
+test('an unrelated fact under the same slug from another file keeps BOTH', () => {
+  // From the same file it would be an update of the one memory (update-retire.test.ts).
   const { store, deps } = rig()
   ingest(input(), deps)
 
   const other =
     'The staging database lives on port 5433 and is seeded nightly from an anonymised ' +
     'dump, so never point an integration test at the production port.'
-  const r = ingest(input({ content: other, body: other }), deps)
+  const r = ingest(input({ content: other, body: other, source: '/memory/staging.md' }), deps)
   if (r.status !== 'ingested') return assert.fail()
 
   assert.equal(store.count(), 2, 'the first was not destroyed')

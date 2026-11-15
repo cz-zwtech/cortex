@@ -101,6 +101,10 @@ export type Explanation = {
   signals?: Candidate['signals']
   rank?: number
   collapsedInto?: string
+  /** Retired: never a candidate (cortex-memory show says by whom and why). */
+  retired?: boolean
+  /** Another row of the same name and scope is newer, and recall shows that one instead. */
+  shownAs?: string
   /** Why the cut dropped it: under the minimum similarity, under the relevance floor, or past k. */
   cutBy?: 'minSim' | 'floor' | 'k'
   returned: boolean
@@ -229,6 +233,23 @@ const toCandidate = (
   }
 }
 
+/**
+ * A newer live row of the same name and scope that is also a candidate, which recall shows in
+ * this row's place. This is the recall-side collapse the reconcile header defers to: versions
+ * the ladder kept side by side share their words, so both are candidates and the newest
+ * shows. Two facts under one name (a 1c pair) do not, so each stays reachable by its own words.
+ */
+export const newerCandidate = (store: MemoryStore, m: Memory, candidates: Set<string>): string | undefined =>
+  m.name
+    ? store.bySlug(m.scope, m.name).find((x) => x.id !== m.id && x.retiredAt === undefined && x.authoredAt > m.authoredAt && candidates.has(x.id))?.id
+    : undefined
+
+/** What recall may show of these rows: none retired, and none with a newer candidate of its name. */
+const showable = (store: MemoryStore, memories: Memory[], others: Memory[] = []): Memory[] => {
+  const candidates = new Set([...others, ...memories].map((m) => m.id))
+  return memories.filter((m) => m.retiredAt === undefined && !newerCandidate(store, m, candidates))
+}
+
 const passes = (s: Candidate['signals'], min: number): boolean =>
   !!s.matched && clearsFloor({ score: s.similarity ?? 0, matched: s.matched.terms, inHead: s.matched.inHead, topical: s.matched.topical }, min)
 
@@ -253,7 +274,11 @@ export const recall = (query: string, opts: RecallOptions): RecallResult => {
   // A memory that states who holds a role the query named is a seed whatever words it shares.
   const resolvedIds = new Set([...(o.resolved?.byTerm.values() ?? [])].flatMap((ids) => [...ids]))
   const extra = [...resolvedIds].filter((id) => !lexical.memories.some((m) => m.id === id)).map((id) => o.store.get(id)).filter((m): m is Memory => !!m)
-  const seeded = extra.length ? { ...lexical, memories: [...extra, ...lexical.memories] } : lexical
+  const seeded = { ...lexical, memories: showable(o.store, [...extra, ...lexical.memories]) }
+  const shown = <T extends { memory: Memory }>(reached: T[]): T[] => {
+    const keep = new Set(showable(o.store, reached.map((r) => r.memory), seeded.memories).map((m) => m.id))
+    return reached.filter((r) => keep.has(r.memory.id))
+  }
 
   // Rank the seeds first: the traversal's stopping threshold has to come from
   // something, and until a hop has happened the seeds are all the evidence there
@@ -283,13 +308,13 @@ export const recall = (query: string, opts: RecallOptions): RecallResult => {
     onDepth: (reached) =>
       kthOf([
         ...seedCandidates,
-        ...reached.map((r) => toCandidate(r.memory, query, o, 'edge', r.hops, r.relation)),
+        ...shown(reached).map((r) => toCandidate(r.memory, query, o, 'edge', r.hops, r.relation)),
       ]),
   })
 
   const all = [
     ...seedCandidates,
-    ...walked.reached.map((r) => toCandidate(r.memory, query, o, 'edge', r.hops, r.relation)),
+    ...shown(walked.reached).map((r) => toCandidate(r.memory, query, o, 'edge', r.hops, r.relation)),
   ]
 
   const ranked = rankCandidates(all, { weights: o.weights, asOf: o.asOf })
@@ -359,6 +384,7 @@ const explainOne = (
   const survived = x.survivors.some((s) => s.memory.id === m.id)
   const returned = x.hits.some((h) => h.memory.id === m.id)
   const best = x.survivors[0]?.score ?? 0
+  const newer = m.retiredAt === undefined ? newerCandidate(x.o.store, m, new Set(x.all.map((c) => c.memory.id))) : undefined
   return {
     target,
     found: true,
@@ -371,6 +397,8 @@ const explainOne = (
     signals: cand.signals,
     rank: at + 1,
     ...(holder ? { collapsedInto: holder.memory.id } : {}),
+    ...(m.retiredAt !== undefined ? { retired: true } : {}),
+    ...(newer ? { shownAs: newer } : {}),
     ...(!survived && !holder && x.o.minSimilarity !== undefined && !passes(cand.signals, x.o.minSimilarity) ? { cutBy: 'minSim' as const } : {}),
     ...(survived && !returned ? { cutBy: (asRanked[at]?.score ?? 0) < best * (x.o.relevanceFraction ?? DEFAULT_RELEVANCE_FRACTION) ? ('floor' as const) : ('k' as const) } : {}),
     returned,

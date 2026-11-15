@@ -41,6 +41,8 @@ export type SweepReport = {
   appendedTo: { source: string; into: string }[]
   /** Files with text below a stub that no single memory owns: held in place with a note. */
   heldAppends: string[]
+  /** Same-file updates whose new text is unrelated to the version they replaced (also told to the next session). */
+  unrelated: { source: string; id: string; name: string }[]
 }
 
 /** A block that opens with frontmatter is a memory in its own right, wherever it sits. */
@@ -61,7 +63,7 @@ export type SweepOptions = {
 
 export const sweep = (opts: SweepOptions, deps: IngestDeps): SweepReport => {
   const now = opts.now ?? Date.now
-  const report: SweepReport = { files: 0, ingested: 0, declined: 0, dropped: 0, receipts: [], cleared: [], folded: [], appendedTo: [], heldAppends: [] }
+  const report: SweepReport = { files: 0, ingested: 0, declined: 0, dropped: 0, receipts: [], cleared: [], folded: [], appendedTo: [], heldAppends: [], unrelated: [] }
 
   // A held memory whose file is gone (deleted by hand, 20 Oct) has nothing left to fix or release, so it
   // leaves the queue; otherwise status reports it held forever. Only this dir's entries, only a missing file.
@@ -134,6 +136,7 @@ export const sweep = (opts: SweepOptions, deps: IngestDeps): SweepReport => {
       // so a file that seems to vanish into another record is visible (node-b, 20 Oct).
       if (result.receipt.action === 'fold') report.folded.push({ source, into: result.receipt.id })
       else report.ingested++
+      if (result.receipt.unrelated) report.unrelated.push({ source, id: result.receipt.id, name: result.receipt.slug })
       report.receipts.push(result.receipt)
       hashes.push(...result.ticket.hashes)
       // The appended block reached the journal inside the merged memory, so it may be consumed by its own hash.

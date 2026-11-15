@@ -40,6 +40,7 @@ import {
   type Candidate,
   type Weights,
 } from './rank.js'
+import { newerCandidate } from './recall.js'
 import type { MemoryStore } from './store.js'
 import type { Estimator } from './reconcile.js'
 import type { Memory } from './types.js'
@@ -74,6 +75,8 @@ export type SessionContext = {
   bytes: number
   /** True when the graph holds nothing — distinct from "nothing was relevant". */
   corpusEmpty: boolean
+  /** Unrelated same-file updates said in the text: the caller marks them shown. */
+  updateNotes: { memoryId: string; at: number }[]
 }
 
 const toCandidate = (
@@ -155,6 +158,17 @@ export const renderStanding = (rules: Memory[], budgetBytes: number) => {
   }
 }
 export const DEFAULT_CANDIDATE_LIMIT = 200
+export const UPDATE_NOTES_SHOWN = 5
+
+/** Same-file updates whose new text is unrelated to the version they replaced (reconcile rung 1). */
+export const renderUpdateNotes = (notes: { name: string }[]): string => {
+  if (!notes.length) return ''
+  const lines = notes
+    .slice(0, UPDATE_NOTES_SHOWN)
+    .map((n) => `- updated \`${n.name}\`; the new text is unrelated to the previous version, which is in \`cortex-memory show ${n.name} --history\``)
+  const more = notes.length > UPDATE_NOTES_SHOWN ? `\n(${notes.length - UPDATE_NOTES_SHOWN} more, in the next session)` : ''
+  return `## Cortex: memories rewritten since the last session\n${lines.join('\n')}${more}`
+}
 
 export const buildSessionContext = (opts: SessionContextOptions): SessionContext => {
   const w = opts.weights ?? INHERITED_WEIGHTS
@@ -162,7 +176,7 @@ export const buildSessionContext = (opts: SessionContextOptions): SessionContext
   const limit = opts.candidateLimit ?? DEFAULT_CANDIDATE_LIMIT
 
   if (opts.store.count() === 0) {
-    return { text: '', included: [], droppedForBudget: 0, standingDropped: 0, bytes: 0, corpusEmpty: true }
+    return { text: '', included: [], droppedForBudget: 0, standingDropped: 0, bytes: 0, corpusEmpty: true, updateNotes: [] }
   }
 
   // Scope is a PRIOR and not a filter here either: candidates are drawn across
@@ -193,6 +207,9 @@ export const buildSessionContext = (opts: SessionContextOptions): SessionContext
   const pool = new Map<string, Memory>()
   for (const m of opts.store.recent(opts.scope ?? 'user', limit)) if (standing(m)) pool.set(m.id, m)
   if (opts.scope) for (const m of opts.store.recent('user', limit)) if (standing(m)) pool.set(m.id, m)
+  // Of several rows with one name in the pool, only the newest, as recall shows them.
+  const pooled = new Set(pool.keys())
+  for (const m of [...pool.values()]) if (newerCandidate(opts.store, m, pooled)) pool.delete(m.id)
 
   const ranked = rankCandidates(
     [...pool.values()].map((m) => toCandidate(m, opts, w)),
@@ -213,12 +230,16 @@ export const buildSessionContext = (opts: SessionContextOptions): SessionContext
     '## Cortex — memories for this session',
   )
 
+  const notes = opts.store.pendingUpdateNotes().filter((n) => !opts.scope || n.scope === opts.scope || n.scope === 'user')
+  const notesText = renderUpdateNotes(notes)
+
   return {
-    text: [ruledText, out.text].filter(Boolean).join('\n\n'),
+    text: [notesText, ruledText, out.text].filter(Boolean).join('\n\n'),
     included: [...ruled.included, ...out.included],
     droppedForBudget: out.dropped,
     standingDropped: ruled.dropped,
-    bytes: ruled.bytes + out.bytes,
+    bytes: ruled.bytes + out.bytes + Buffer.byteLength(notesText, 'utf-8'),
     corpusEmpty: false,
+    updateNotes: notes.slice(0, UPDATE_NOTES_SHOWN).map((n) => ({ memoryId: n.memoryId, at: n.at })),
   }
 }

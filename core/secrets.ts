@@ -127,7 +127,25 @@ const isHighEntropyRun = (t: string): boolean =>
  */
 const HIGH_ENTROPY_RUN = 24
 const JOINERS = /[-_.:]+/
-const isHighEntropy = (t: string): boolean => t.split(JOINERS).some(isHighEntropyRun)
+const isHighEntropy = (t: string): boolean => t.split(JOINERS).some((run) => isHighEntropyRun(run) && !isCamelIdentifier(run))
+
+/**
+ * A code identifier written in CamelCase (a cited API class, such as a vision framework request) is
+ * long and mixed-case with a digit, like a credential, but it reads as whole words. Split it into
+ * its pieces without backtracking: it is a name when the pieces rebuild it exactly, at least three
+ * are capitalised words, and at most two are short acronyms or numbers (3D, V2, URL). A random base62
+ * run breaks into one-letter lowercase pieces at once and never passes.
+ */
+const isCamelIdentifier = (t: string): boolean => {
+  const pieces = t.match(/[A-Z][a-z]+|[a-z]+|[A-Z]+(?![a-z])|[0-9]+/g) ?? []
+  if (pieces.join('') !== t) return false
+  const isWord = (p: string, i: number) => /^[A-Z][a-z]{2,}$/.test(p) || (i === 0 && /^[a-z]{2,}$/.test(p))
+  const isShort = (p: string) => /^[A-Z]{1,4}$/.test(p) || /^[0-9]{1,2}$/.test(p)
+  const words = pieces.filter((p) => /^[A-Z][a-z]{2,}$/.test(p)).length
+  // At most two acronyms or numbers: words interleaved with digits (Alpha1Bravo2Charlie3) is a passphrase.
+  const shorts = pieces.filter(isShort).length
+  return words >= 3 && shorts <= 2 && pieces.every((p, i) => isWord(p, i) || isShort(p))
+}
 
 /**
  * A provider prefix is a credential only when a credential FOLLOWS it.

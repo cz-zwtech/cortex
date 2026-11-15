@@ -21,7 +21,8 @@
     "memory.blockAdopt",
     "memory.sessionInfo",
     "memory.shapeOf",
-    "memory.verify"
+    "memory.verify",
+    "memory.retire"
   ],
   "optional": [
     "comms"
@@ -46,7 +47,9 @@
       "staleness",
       "people",
       "subject_index",
-      "constraint_lines"
+      "constraint_lines",
+      "retired_hashes",
+      "update_notes"
     ],
     "views": []
   },
@@ -173,7 +176,10 @@
     "test/depth.test.ts",
     "test/consolidate.test.ts",
     "test/consolidate-stages.test.ts",
-    "test/sync-seams.test.ts"
+    "test/sync-seams.test.ts",
+    "test/update.test.ts",
+    "test/retire.test.ts",
+    "test/duplicates-cli.test.ts"
   ],
   "claudeImports": [
     "rules.md"

@@ -129,6 +129,28 @@ test('slugs, timestamps and glued identifiers are not credentials', () => {
   for (const line of names) assert.deepEqual(scanForSecrets(line), [], line)
 })
 
+test('a CamelCase code identifier is a name, even long with a digit; a random run is not', () => {
+  // Built from pieces, so no literal in this file is itself a credential-shaped run for a scanner.
+  const glue = (...pieces: string[]) => pieces.join('')
+  for (const line of [
+    `Pose comes from ${glue('DetectHumanBody', 'Pose3DRequest')} in the vision framework.`,
+    `The client is ${glue('HttpServerTransport', 'V2Handler')}, and ${glue('parseJsonResponse', 'BodyAsync')} wraps it.`,
+  ]) assert.deepEqual(scanForSecrets(line), [], line)
+  // Under the run length an identifier never reaches the exemption; a lowercase piece after a digit is refused.
+  assert.deepEqual(scanForSecrets('Short is ParseHttp2Body here.'), [])
+  for (const run of [
+    glue('aB3xQ7zR9mK2', 'pL5vN8tW1yU4sD6fG0hJ'),
+    glue('Ab1Cd2Ef3Gh4', 'Ij5Kl6Mn7Op8Qr9'),
+    glue('XyzAbcQweRty', 'ZxcVbn9KpLmNoQrSt7Uv'),
+    glue('QWERTYUIOPASDFGHJKLZXCVBNM', 'qw12er'),
+    glue('Qwe1Rty2Zxc3', 'Vbn4Asd5Fgh6'),
+    glue('Alpha1Bravo2', 'Charlie3Delta4'),
+    glue('Load3dModelLoader', 'RequestHandler'),
+  ]) {
+    assert.equal(scanForSecrets(`token ${run}`)[0]?.kind, 'high-entropy', run)
+  }
+})
+
 test('a bare provider prefix is a memory ABOUT a token type, not a token', () => {
   for (const line of [
     'GitLab PATs start with glpat- and fine-grained GitHub ones with github_pat_.',

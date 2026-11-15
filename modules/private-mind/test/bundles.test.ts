@@ -14,6 +14,7 @@ import { frontmatterOf } from '../../memory/server/frontmatter.js'
 import { ContextStore } from '../../memory/server/context/store.js'
 import { adoptRecords, ingest } from '../../memory/server/ingest.js'
 import { Journal } from '../../memory/server/journal.js'
+import { retire } from '../../memory/server/retire.js'
 import { MemoryStore } from '../../memory/server/store.js'
 import { fromNdjson, toNdjson } from '../server/bundle.js'
 import { MindConfigSchema } from '../server/config.js'
@@ -102,6 +103,22 @@ test('knowledge from a known writer goes; a local role keeps its memories home, 
   const r2 = await sync(a, b)
   assert.ok(!r2.text.includes(contoso) && !r2.text.includes('contoso-case'), 'nor did its deletion, which would have named it')
   assert.equal(b.journal.versionVector()['node-a'], 4)
+})
+
+test('a retirement travels and the peer keeps the memory retired; one of a memory kept home goes as a gap', async () => {
+  const a = node('node-a')
+  const b = node('node-b')
+  a.roles.set('s-contoso', ['contoso'])
+  a.kinds.set('s-contoso', { entrypoint: 'cli' })
+  const shared = a.write('queue-choice', 'The job queue is the append-only log.')
+  const contoso = a.write('contoso-case', 'Case 4471 concerns a neighbour dispute.', 's-contoso')
+  await sync(a, b)
+  retire(a, shared, { by: 'tester@node-a' })
+  retire(a, contoso, { by: 'tester@node-a' })
+  const r = await sync(a, b)
+  assert.notEqual(b.store.get(shared)!.retiredAt, undefined, 'retired on the peer')
+  assert.ok(!r.text.includes(contoso), 'the kept-home one is not named')
+  assert.equal(b.journal.versionVector()['node-a'], 4, 'its retirement went as a gap, so the vector passes it')
 })
 
 test('a writer comms cannot name holds its memory back, without stopping what comes after; it goes once the writer is known', async () => {

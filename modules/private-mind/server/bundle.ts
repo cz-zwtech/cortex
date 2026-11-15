@@ -10,9 +10,9 @@
  *   receiver's vector stops below it and it is sent once its writer is known;
  *   a writer still unknown after the grace is given up on: held for good, a gap;
  * - working detail stays home, a pointer goes instead (and a gap for its seq);
- * - deletions and redactions go, unless their target was kept home: then they
- *   go as a gap, since their target id would name it. Kept-home hashes are
- *   remembered, because a redaction removes its target from this machine too;
+ * - deletions, redactions and retirements go, unless a target was kept home:
+ *   then they go as a gap, since their target id would name it. Kept-home hashes
+ *   are remembered, because a redaction removes its target from this machine too;
  * - consolidation records always go;
  * - records this node adopted from others go on as they came: their origin
  *   already decided.
@@ -29,7 +29,7 @@ import type { MindConfig } from './config.js'
 import type { Pointer, Writer } from './store.js'
 
 /** The parts of a journal record this module reads; the record itself travels untouched. */
-export type Rec = { kind: string; machine: string; seq: number; session?: string; scope?: string; syncClass?: string; slug?: string; content?: string; contentHash?: string; targetHash?: string }
+export type Rec = { kind: string; machine: string; seq: number; session?: string; scope?: string; syncClass?: string; slug?: string; content?: string; contentHash?: string; targetHash?: string; hashes?: string[] }
 export type Block = { machine: string; session: string; mseq: number; [k: string]: unknown }
 export type Line = { t: 'record'; r: Rec } | { t: 'pointer'; p: Pointer } | { t: 'block'; b: Block }
 export type HeldCode = 'local-role' | 'local-place' | 'waiting' | 'given-up' | 'secret-gate'
@@ -69,6 +69,9 @@ const summaryOf = (content = ''): string => {
   return (d ?? content.replace(/^---[\s\S]*?\n---\s*/, '').split('\n').find((l) => l.trim()) ?? '').trim().slice(0, 200)
 }
 
+/** Records that name other records by hash, and so may name one kept home. */
+const TARGETED = new Set(['tombstone', 'redaction', 'retirement', 'unretirement'])
+
 type Decision = { send: 'record' } | { send: 'pointer' } | { send: 'gap' | 'wait'; code: HeldCode; why: string }
 
 /** What becomes of one of this machine's own memories. */
@@ -107,9 +110,11 @@ export const buildBundle = (o: BuildInput): { lines: Line[]; held: Held[]; kept:
       } else lines.push({ t: 'record', r })
       continue
     }
-    if (r.kind === 'tombstone' || r.kind === 'redaction') {
-      if (r.targetHash && kept.has(r.targetHash)) gap(r)
-      else if (r.targetHash && waiting.has(r.targetHash)) waitingFrom = Math.min(waitingFrom ?? Infinity, r.seq)
+    if (TARGETED.has(r.kind)) {
+      // A retirement names every version of its memory: one kept home is enough to hold it.
+      const targets = r.targetHash ? [r.targetHash] : (r.hashes ?? [])
+      if (targets.some((h) => kept.has(h))) gap(r)
+      else if (targets.some((h) => waiting.has(h))) waitingFrom = Math.min(waitingFrom ?? Infinity, r.seq)
       else lines.push({ t: 'record', r })
       continue
     }
