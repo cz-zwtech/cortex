@@ -113,7 +113,7 @@ const alive = (pid: number) => {
 /** Another live daemon already serves this dir. */
 export class DaemonLocked extends Error {
   constructor(readonly holder: number) {
-    super(`a mesh daemon (pid ${holder}) already serves this dir; stop it first`)
+    super(holder ? `a mesh daemon (pid ${holder}) already serves this dir; stop it first` : 'another mesh daemon was taking this dir at the same moment; try again')
   }
 }
 
@@ -142,12 +142,21 @@ export const acquirePid = (dir: string, pid: number, serving = isServe): { ok: t
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
     }
-    const holder = Number(fs.readFileSync(file, 'utf-8'))
+    const holder = readPid(file)
     if (holder === pid) return { ok: true }
     if (holder && alive(holder) && serving(holder)) return { ok: false, holder }
     fs.rmSync(file, { force: true })
   }
-  return { ok: false, holder: Number(fs.readFileSync(file, 'utf-8')) }
+  // Lost the race twice: someone else is taking it now. 0 when it was released again meanwhile.
+  return { ok: false, holder: readPid(file) }
+}
+
+const readPid = (file: string): number => {
+  try {
+    return Number(fs.readFileSync(file, 'utf-8')) || 0
+  } catch {
+    return 0
+  }
 }
 
 /** Remove the pid file only when it still names `pid`: another daemon's file is never ours to drop. */
