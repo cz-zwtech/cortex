@@ -40,6 +40,8 @@ import path from 'node:path'
 import { dataRoot, meshDir } from '../core/paths.js'
 import { machineId } from '../core/machineId.js'
 import { MeshLog } from '../modules/comms/server/mesh/log.js'
+import { connects } from '../modules/comms/server/mesh/connect.js'
+import { isRunning } from '../modules/comms/server/mesh/control.js'
 import { meshView } from '../modules/comms/server/mesh/view.js'
 import { localRoles } from '../modules/comms/server/meshBridge.js'
 import { heldOutbound, rolelessHoldNote } from '../modules/comms/server/mesh/router.js'
@@ -397,7 +399,21 @@ try {
         })
       }
       let lastWatchBeat = Date.now()
+      // A connected node whose daemon is down hears nothing from other nodes: say so, once per change,
+      // rather than look idle (17 Nov: a powered-on machine's daemon stayed down for hours unseen).
+      let lastDaemonCheck = 0
+      let daemonDown = false
       for (;;) {
+        if (Date.now() - lastDaemonCheck >= 60_000) {
+          lastDaemonCheck = Date.now()
+          const down = connects(meshDir()) && !isRunning(meshDir())
+          if (down !== daemonDown) {
+            console.log(down
+              ? '[comms] mesh daemon not running: messages from other nodes are not arriving (cortex-mesh start)'
+              : '[comms] mesh daemon running again: messages from other nodes arrive')
+            daemonDown = down
+          }
+        }
         if (Date.now() - lastWatchBeat >= WATCH_BEAT_MS) {
           recordWatch(commsDir, { ...state, beatAt: Date.now() })
           lastWatchBeat = Date.now()
