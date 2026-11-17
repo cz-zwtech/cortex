@@ -143,6 +143,16 @@ const readBody = (from: string[]): string => {
  * every failure are always shown, because they change what the sender does.
  */
 /** What leaving did to the role: an emptied role is deleted unless --keep. */
+/** The daemon log's last line, which says why a daemon that died stopped. */
+const lastLogLine = (dir: string): string => {
+  try {
+    const last = fs.readFileSync(path.join(dir, 'daemon.log'), 'utf-8').trimEnd().split('\n').pop()
+    return last ? `; daemon.log ends: ${last.slice(0, 200)}` : ''
+  } catch {
+    return ''
+  }
+}
+
 const endNote = (role: string, r: { deleted: boolean; returned: number }): string =>
   r.deleted
     ? `; ${role} had no members left and was deleted${r.returned ? `, ${r.returned} unhandled message(s) returned to their senders` : ''}${rolelessNote()}`
@@ -409,7 +419,7 @@ try {
           const down = connects(meshDir()) && !isRunning(meshDir())
           if (down !== daemonDown) {
             console.log(down
-              ? '[comms] mesh daemon not running: messages from other nodes are not arriving (cortex-mesh start)'
+              ? `[comms] mesh daemon not running: messages from other nodes are not arriving (cortex-mesh start)${lastLogLine(meshDir())}`
               : '[comms] mesh daemon running again: messages from other nodes arrive')
             daemonDown = down
           }
