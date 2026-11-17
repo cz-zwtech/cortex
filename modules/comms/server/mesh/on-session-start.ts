@@ -34,15 +34,21 @@ export default async (payload: unknown, ctx: ModuleCtx, env: NodeJS.ProcessEnv =
     const m = migrateConnect(dir)
     if (m.wrote) ctx.log(`mesh: connect set once from what this node did before: listen ${m.listen ? 'on' : 'off'} (${m.why})`)
     if (!connects(dir)) return undefined
-    const problem = startProblem(await start(dir), dir)
+    const result = await start(dir)
+    const problem = startProblem(result, dir)
     if (problem) {
       note(dir, problem)
-      return { additionalContext: `Cortex mesh: the daemon did not start (${problem}), so messages from other nodes will not arrive. Run cortex-mesh start.` }
+      return { additionalContext: `Cortex mesh: the daemon did not start (${problem}), so messages from other nodes will not arrive. Run cortex-mesh start and report it.` }
     }
+    if (result === 'started') return { additionalContext: 'Cortex mesh: the daemon was down; a start was issued. If it stays down, the watcher says so: then run cortex-mesh start and report it.' }
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err)
-    note(meshDir(), `failed: ${why}`)
-    return { additionalContext: `Cortex mesh: the daemon did not start (${why}), so messages from other nodes will not arrive. Run cortex-mesh start.` }
+    try {
+      note(meshDir(), `failed: ${why}`)
+    } catch {
+      /* the mesh dir itself is what failed */
+    }
+    return { additionalContext: `Cortex mesh: the daemon did not start (${why}), so messages from other nodes will not arrive. Run cortex-mesh start and report it.` }
   }
   return undefined
 }

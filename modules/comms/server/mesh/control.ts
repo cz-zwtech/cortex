@@ -38,7 +38,8 @@ export type Systemd = {
   mainPid: () => number | undefined
 }
 
-const systemctl = (...args: string[]) => spawnSync('systemctl', ['--user', ...args], { encoding: 'utf-8' })
+// A timeout: the watch loop asks once a minute, and a user manager in a bad state must not hang it.
+const systemctl = (...args: string[]) => spawnSync('systemctl', ['--user', ...args], { encoding: 'utf-8', timeout: 5_000 })
 
 export const systemd: Systemd = {
   dir: path.join(os.homedir(), '.config', 'ckn', 'data', 'mesh'),

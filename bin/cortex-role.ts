@@ -411,7 +411,8 @@ try {
       let lastWatchBeat = Date.now()
       // A connected node whose daemon is down hears nothing from other nodes: say so, once per change,
       // rather than look idle (17 Nov: a powered-on machine's daemon stayed down for hours unseen).
-      let lastDaemonCheck = 0
+      // First check after about 15 s: a session arms its watcher seconds after the hook spawned the daemon.
+      let lastDaemonCheck = Date.now() - 45_000
       let daemonDown = false
       for (;;) {
         if (Date.now() - lastDaemonCheck >= 60_000) {
@@ -419,7 +420,7 @@ try {
           const down = connects(meshDir()) && !isRunning(meshDir())
           if (down !== daemonDown) {
             console.log(down
-              ? `[comms] mesh daemon not running: messages from other nodes are not arriving (cortex-mesh start)${lastLogLine(meshDir())}`
+              ? `[comms] mesh daemon not running: messages from other nodes are not arriving. Run cortex-mesh start and report it${lastLogLine(meshDir())}`
               : '[comms] mesh daemon running again: messages from other nodes arrive')
             daemonDown = down
           }
