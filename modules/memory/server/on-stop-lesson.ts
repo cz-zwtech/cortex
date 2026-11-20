@@ -8,7 +8,7 @@
  * only if this session made it stick in the last half hour: a rule or feedback
  * memory written (edited_in), or a commit the reply cites. Otherwise the
  * reminder, quoting the lesson, waits for the session's next prompt
- * (pendingReminders.ts): a held Stop shows the user a hook error, and the
+ * (core/pendingReminders.ts): a held Stop shows the user a hook error, and the
  * reminder reaches the model just as well one prompt later. A continuation
  * another Stop hook asked for (`stop_hook_active`) and subagents are left alone.
  */
@@ -16,8 +16,8 @@
 import path from 'node:path'
 
 import type { ModuleCtx } from '../../../core/ctx.js'
+import { addReminder } from '../../../core/pendingReminders.js'
 import { lastReply } from './ruleAudit.js'
-import { addReminder } from './pendingReminders.js'
 import { appendFire } from './ruleReview.js'
 import { MemoryStore } from './store.js'
 

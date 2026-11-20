@@ -1,7 +1,8 @@
 /**
  * Reminders a Stop hook would once have held the turn for. Claude Code shows a
  * held Stop as a hook error, so they wait here, one per key per session, and
- * the next prompt for that session carries them.
+ * the next prompt for that session carries them. Each module keeps its own in
+ * its dataDir and delivers its own, so no note is delivered twice.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -29,4 +30,10 @@ export const takeReminders = (dataDir: string, session: string): string[] => {
   const pending = Object.values(read(f))
   fs.rmSync(f, { force: true })
   return pending
+}
+
+/** The session's pending reminders as one prompt note, or undefined when there are none. */
+export const takeReminderNote = (dataDir: string, session: string): string | undefined => {
+  const pending = takeReminders(dataDir, session)
+  return pending.length ? `Cortex reminder from your last reply:\n\n${pending.join('\n\n')}` : undefined
 }

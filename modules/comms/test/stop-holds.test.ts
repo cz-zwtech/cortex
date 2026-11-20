@@ -13,7 +13,7 @@ import { handle, handleStop } from '../server/hooks.js'
 import { Comms } from '../server/comms.js'
 import { LocalIdentity } from '../server/identity.js'
 import { MemoryTransport } from '../server/transport.js'
-import { LAPSE_GRACE_MS, recordPrompt, recordStandDown, recordWatch, STAND_DOWN_MS, STOP_BLOCKS_PER_LAPSE, standDown, watchStatus } from '../server/watchState.js'
+import { lapseText, LAPSE_GRACE_MS, recordPrompt, recordStandDown, recordWatch, STAND_DOWN_MS, STOP_BLOCKS_PER_LAPSE, standDown, watchStatus } from '../server/watchState.js'
 import { isolatedEnv } from '../../../test/isolatedEnv.js'
 
 const REPO = path.resolve(import.meta.dirname, '..', '..', '..')
@@ -87,6 +87,16 @@ test('a lapse older than the grace is held even after the last prompt; a 30 s on
   assert.equal(await fresh.stop(), undefined, 'the routine expiry just before the turn ends')
 })
 
+test('a silent death whose last beat came 10 s before the prompt is not taken as down before it', async () => {
+  const { dir, stop } = await rig()
+  const now = Date.now()
+  recordWatch(dir, { member: 'crew1', pid: 1, startedAt: now - 5 * 60_000, beatAt: now - 70_000 })
+  recordPrompt(dir, 'crew1', now - 60_000)
+  assert.equal(await stop(), undefined, 'it may have been alive at the prompt')
+  recordPrompt(dir, 'crew1', now - 50_000)
+  assert.equal((await stop())?.decision, 'deny', 'more than a beat after the last one: down before the prompt')
+})
+
 test('a member that never armed a watcher is held once per session', async () => {
   const { local, stop } = await rig()
   local.bindSession('s2', 'crew1')
@@ -123,7 +133,16 @@ test('the prompt reminder says whether the watch was stood down, stopped, or its
   recordWatch(dir, { member: 'crew1', pid: 1, startedAt: t - 60_000, beatAt: t, endedAt: t + 180_000, endedBy: 'signal' })
   assert.match(await prompt(), /your watcher was stood down at 03:06Z by sess-a/)
   const start = (await handle({ session_id: 's3', session_title: 'crew1' }, ctx(dir), 'SessionStart', () => m, env)) as { additionalContext: string }
-  assert.match(start.additionalContext, /Cortex comms: your watcher was stood down at 03:06Z by sess-a\. To receive messages/)
+  assert.match(start.additionalContext, /Cortex comms: your watcher was stood down at 03:06Z by sess-a, more than ten minutes ago\. To receive messages/)
+})
+
+test('a stand-down past its ten minutes says so', () => {
+  const dir = tmp()
+  const t = Date.UTC(2026, 0, 2, 3, 4)
+  const status = { kind: 'lapsed', at: t, endedBy: 'signal' } as const
+  recordStandDown(dir, { member: 'crew1', sessionId: 'sess-a', at: t })
+  assert.equal(lapseText(dir, 'crew1', status, t + 60_000), 'your watcher was stood down at 03:04Z by sess-a')
+  assert.equal(lapseText(dir, 'crew1', status, t + STAND_DOWN_MS + 1), 'your watcher was stood down at 03:04Z by sess-a, more than ten minutes ago')
 })
 
 test('the watch records a signal end and a window end; standdown is recorded and a new watch clears it', async () => {

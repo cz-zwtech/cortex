@@ -1,6 +1,6 @@
 /**
  * The lesson and ask Stop checks leave a reminder for the next prompt instead of
- * holding the turn (pendingReminders.ts, on-prompt-reminders.ts); the outbound
+ * holding the turn (core/pendingReminders.ts, on-prompt-reminders.ts); the outbound
  * audit still holds, worded as a reminder.
  */
 import assert from 'node:assert/strict'

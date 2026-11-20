@@ -1,5 +1,6 @@
 import type { ModuleCtx } from '../../../core/ctx.js'
 import type { SubscriberResponse } from '../../../core/aggregate.js'
+import { addReminder, takeReminderNote } from '../../../core/pendingReminders.js'
 import { cliPath, deliveryText, metaFor, notMemberText, openComms, resolveMember, type HookPayload } from './session.js'
 import { completeHeld, heldRenames } from './renames.js'
 import type { Comms } from './comms.js'
@@ -78,6 +79,8 @@ export const handle = async (
       lines.push(`Cortex comms: ${r.note}; this session is ${r.member}.`)
     }
     if (items.length) lines.push(deliveryText(r.member, items, cliPath(), verbose))
+    const note = event === 'UserPromptSubmit' && p.session_id ? takeReminderNote(ctx.dataDir, p.session_id) : undefined
+    if (note) lines.push(note)
 
     const watch = watchStatus(ctx.dataDir, r.member)
     if (event === 'SessionStart' && watch.kind !== 'live') {
@@ -115,7 +118,8 @@ export const handle = async (
  * Claude Code shows every hold as a hook error, so it is kept to the cases
  * stopShouldHold names. A watcher that lapses during the turn is not held for:
  * its Monitor-ended notice wakes the session and the prompt reminder tells it.
- * A recent `cortex-role standdown` means the stop was chosen: nothing is held.
+ * A recent `cortex-role standdown` means the stop was chosen: nothing is held
+ * or noted.
  *
  * A Monitor started late in the turn may not have written its state yet, so a
  * watcher that is not live is given a short grace before the verdict.
@@ -147,7 +151,8 @@ export const handleStop = async (
       }
     }
     if (!stopShouldHold(watch, promptAt) || !takeStopBlock(ctx.dataDir, member, p.session_id, watch)) {
-      return comms ? await awaitsReminder(local, comms, member) : undefined
+      if (comms && p.session_id) await noteAwaits(ctx.dataDir, p.session_id, local, comms, member)
+      return undefined
     }
     const since = watch.kind === 'lapsed' ? ` since ${new Date(watch.at).toISOString().slice(11, 16)}Z` : ''
     return {
@@ -165,20 +170,17 @@ export const handleStop = async (
 
 /**
  * Once per key: a message this member has seen says someone expects an answer
- * elsewhere, and no answer is marked. The turn continues once with the how;
- * after that it is the member's call, never a second hold.
+ * elsewhere, and no answer is marked. The next prompt carries the how, not a
+ * held Stop (Claude Code shows a hold as a hook error); after that it is the
+ * member's call.
  */
-const awaitsReminder = async (local: LocalIdentity, comms: Comms, member: string): Promise<SubscriberResponse> => {
+const noteAwaits = async (dataDir: string, session: string, local: LocalIdentity, comms: Comms, member: string) => {
   const done = local.awaits(member)
   const seen = local.seen(member)
   const owed = (await comms.inbox(member, { includeSeen: true })).filter((i) => i.awaits && seen.has(i.id) && !done[i.awaits.key])
-  if (!owed.length) return undefined
-  for (const i of owed) local.markAwait(member, i.awaits!.key, 'reminded')
-  return {
-    decision: 'deny',
-    reason:
-      `Cortex comms: an answer is still expected for ${owed.length === 1 ? 'this message' : `${owed.length} messages`} (reminded once, not again):\n` +
-      owed.map((i) => `- from ${i.from}: ${i.awaits!.how}`).join('\n'),
+  for (const i of owed) {
+    local.markAwait(member, i.awaits!.key, 'reminded')
+    addReminder(dataDir, session, `awaits:${i.awaits!.key}`, `Cortex comms: an answer is still expected for a message from ${i.from} (reminded once, not again): ${i.awaits!.how}`)
   }
 }
 

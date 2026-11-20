@@ -6,7 +6,7 @@
  * question. A reply that ends with a factual
  * question gets one recall on that question; if memory holds something that
  * covers it, the next prompt carries the question and the hits, to answer from
- * them or say they do not answer it (pendingReminders.ts). It is not held at
+ * them or say they do not answer it (core/pendingReminders.ts). It is not held at
  * Stop: Claude Code shows a held Stop as a hook error. Decision and permission
  * questions ("should I go ahead?") are the user's to answer and pass.
  *
@@ -14,9 +14,9 @@
  */
 
 import type { ModuleCtx } from '../../../core/ctx.js'
+import { addReminder } from '../../../core/pendingReminders.js'
 import { renderHits } from './inject.js'
 import { recall } from './recall.js'
-import { addReminder } from './pendingReminders.js'
 import { appendRecallLog } from './recallLog.js'
 import { queryTerms, terms } from './relevance.js'
 import { lexicalSeed } from './seed.js'

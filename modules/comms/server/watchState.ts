@@ -42,7 +42,8 @@ type Reminded = { lapse?: number; sessions?: string[]; blocks?: Record<string, n
 export type WatchStatus =
   | { kind: 'never' }
   | { kind: 'live'; since: number }
-  | { kind: 'lapsed'; at: number; endedBy?: 'window' | 'signal' }
+  // stale: no clean end was written; `at` is then the last beat, not the end.
+  | { kind: 'lapsed'; at: number; endedBy?: 'window' | 'signal'; stale?: true }
 
 const file = (dir: string, member: string, suffix = '') => path.join(dir, 'watch', `${member}${suffix}.json`)
 
@@ -75,7 +76,7 @@ export const watchStatus = (dir: string, member: string, now = Date.now()): Watc
   const s = read<WatchState>(file(dir, member))
   if (!s) return { kind: 'never' }
   if (s.endedAt) return { kind: 'lapsed', at: s.endedAt, ...(s.endedBy ? { endedBy: s.endedBy } : {}) }
-  if (now - s.beatAt > WATCH_STALE_MS) return { kind: 'lapsed', at: s.beatAt }
+  if (now - s.beatAt > WATCH_STALE_MS) return { kind: 'lapsed', at: s.beatAt, stale: true }
   return { kind: 'live', since: s.startedAt }
 }
 
@@ -100,9 +101,12 @@ export const takeReminder = (dir: string, member: string, sessionId: string | un
 const hhmm = (t: number) => `${new Date(t).toISOString().slice(11, 16)}Z`
 
 /** How a watcher that is not live came to stop, said so nobody reads a chosen stop as a failure or the reverse. */
-export const lapseText = (dir: string, member: string, status: Extract<WatchStatus, { kind: 'lapsed' }>): string => {
+export const lapseText = (dir: string, member: string, status: Extract<WatchStatus, { kind: 'lapsed' }>, now = Date.now()): string => {
   const sd = standDown(dir, member)
-  if (sd) return `your watcher was stood down at ${hhmm(sd.at)} by ${sd.sessionId ?? sd.member}`
+  if (sd) {
+    const old = now - sd.at >= STAND_DOWN_MS ? ', more than ten minutes ago' : ''
+    return `your watcher was stood down at ${hhmm(sd.at)} by ${sd.sessionId ?? sd.member}${old}`
+  }
   if (status.endedBy === 'window') return `your watcher's window ended at ${hhmm(status.at)}`
   return `your watcher stopped at ${hhmm(status.at)}`
 }
@@ -127,7 +131,9 @@ export const LAPSE_GRACE_MS = 2 * 60_000
 export const stopShouldHold = (status: WatchStatus, promptAt: number | undefined, now = Date.now()): boolean => {
   if (status.kind === 'live') return false
   if (status.kind === 'never') return true
-  return (promptAt !== undefined && status.at < promptAt) || now - status.at > LAPSE_GRACE_MS
+  // A silent death may have come up to a beat after the last one written: down only from then.
+  const downBy = status.stale ? status.at + WATCH_BEAT_MS : status.at
+  return (promptAt !== undefined && downBy < promptAt) || now - status.at > LAPSE_GRACE_MS
 }
 
 /**

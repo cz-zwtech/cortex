@@ -195,12 +195,16 @@ test('STOP: with its default grace, the hold is decided inside the dispatcher bu
   assert.ok(Date.now() - t0 < 1_500, `took ${Date.now() - t0} ms`)
 })
 
-test('STOP: a seen message that awaits an answer elsewhere holds the turn once per key, and never once answered', async () => {
+test('STOP: a seen message that awaits an answer elsewhere is noted for the next prompt once per key, and never once answered', async () => {
   const dir = tmp()
   const m = await member(dir)
   await m.comms.join('svc', { create: true, as: 'svc1' })
   recordWatch(dir, { member: 'crew1', pid: 1, startedAt: Date.now(), beatAt: Date.now() })
   const stop = () => handleStop({ session_id: 's1' }, ctx(dir), () => m, {}, 0)
+  const prompt = async () =>
+    ((await handle({ session_id: 's1', session_title: 'crew1' }, ctx(dir), 'UserPromptSubmit', () => m, { CKN_MEMBER: 'crew1' })) as
+      | { additionalContext?: string }
+      | undefined)?.additionalContext ?? ''
   const how = 'answer on Telegram with: cortex-telegram send --reply-to 7 (text on stdin)'
   await m.comms.send('svc1', 'crew', 'operator message 7 is yours', { awaits: { key: 'telegram:7', how } })
   await m.comms.send('svc1', 'crew', 'operator message 8 is yours', { awaits: { key: 'telegram:8', how: 'reply 8' } })
@@ -209,15 +213,16 @@ test('STOP: a seen message that awaits an answer elsewhere holds the turn once p
   const items = await m.comms.inbox('crew1')
   assert.equal(items[0]!.awaits?.key, 'telegram:7')
   m.comms.markSeen('crew1', [items[0]!.id])
-  const r = (await stop()) as { decision: string; reason: string }
-  assert.equal(r.decision, 'deny')
-  assert.match(r.reason, /answer is still expected.*reminded once.*\n- from svc\/svc1: answer on Telegram with: cortex-telegram send --reply-to 7/s)
-  assert.doesNotMatch(r.reason, /reply 8/, 'only what the session has seen')
-  assert.equal(await stop(), undefined, 'once, never a second hold')
+  assert.equal(await stop(), undefined, 'never held at Stop')
+  const said = await prompt()
+  assert.match(said, /Cortex reminder from your last reply:\n\nCortex comms: an answer is still expected for a message from svc\/svc1 \(reminded once, not again\): answer on Telegram with: cortex-telegram send --reply-to 7/)
+  assert.doesNotMatch(said, /reply 8/, 'only what the session has seen')
+  assert.doesNotMatch(await prompt(), /answer is still expected/, 'delivered once')
 
+  // That prompt showed message 8; it is answered before the next Stop, and 7 was already reminded.
   m.local.markAwait('crew1', 'telegram:8', 'answered')
-  m.comms.markSeen('crew1', [items[1]!.id])
-  assert.equal(await stop(), undefined, 'answered before Stop: no reminder')
+  await stop()
+  assert.doesNotMatch(await prompt(), /answer is still expected/, 'once per key; answered before Stop: no reminder')
   m.local.markAwait('crew1', 'telegram:8', 'reminded')
   assert.deepEqual(m.local.awaits('crew1'), { 'telegram:7': 'reminded', 'telegram:8': 'answered' }, 'answered is final')
 })

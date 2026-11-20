@@ -133,7 +133,7 @@ test('lesson gate: the next prompt is reminded unless a rule or feedback memory 
   const { default: onStopLesson } = await import('../server/on-stop-lesson.js')
   const { sweep } = await import('../server/sweep.js')
   const { Journal } = await import('../server/journal.js')
-  const { takeReminders } = await import('../server/pendingReminders.js')
+  const { takeReminders } = await import('../../../core/pendingReminders.js')
   const { fixture } = await import('./engagement-fixture.js')
   const { store, ctx, dataDir } = fixture()
   const reply = 'Merged. Noted, I will not append to stub files again.'
