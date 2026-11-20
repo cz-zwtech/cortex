@@ -31,6 +31,8 @@ Never send work to a guessed recipient. `/cortex-role who` with no words lists e
 with their roles, machine and whether they are live. Members can declare what they do with
 `/cortex-role set about="writes the user docs"`, which makes `who` better at finding them.
 After a join, rename or move, start the watcher the output names, in the same turn.
+To stop listening on purpose (before an exit), run `standdown`, then stop the watcher Monitor with TaskStop;
+without it, a turn that ends with the watcher down after a reminder is held for a re-arm.
 `join` and `move` create a role that does not exist, and say `created role X` instead of `joined role X`,
 so a typo shows. `move <from> <to>` changes role without a new session. A role left with no members is deleted, and its unhandled messages go back to their senders; `--keep` keeps it.
 `debug on` adds delivery status, liveness and claim detail to everything; `debug off` returns to normal.

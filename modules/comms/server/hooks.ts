@@ -4,7 +4,19 @@ import { cliPath, deliveryText, metaFor, notMemberText, openComms, resolveMember
 import { completeHeld, heldRenames } from './renames.js'
 import type { Comms } from './comms.js'
 import type { LocalIdentity } from './identity.js'
-import { isHeadless, takeReminder, takeStopBlock, watchStatus, type WatchStatus } from './watchState.js'
+import {
+  isHeadless,
+  lapseText,
+  lastPromptAt,
+  recordPrompt,
+  STAND_DOWN_MS,
+  standDown,
+  stopShouldHold,
+  takeReminder,
+  takeStopBlock,
+  watchStatus,
+  type WatchStatus,
+} from './watchState.js'
 import { isVerbose } from './verbose.js'
 
 /**
@@ -39,6 +51,7 @@ export const handle = async (
       return Object.keys(response).length ? (response as SubscriberResponse) : undefined
     }
 
+    if (event === 'UserPromptSubmit') recordPrompt(ctx.dataDir, r.member)
     const done = await completeHeld(ctx.dataDir, local, comms, r.member, metaFor(p, env)).catch(() => undefined)
     if (done) r.member = local.sessionMember(p.session_id) ?? r.member
     // A held rename: the title is already the new name and the member keeps the old one until its
@@ -71,11 +84,12 @@ export const handle = async (
       // Telling the session at start counts as its reminder, so the first
       // prompt does not repeat it; only a later lapse is mentioned again.
       takeReminder(ctx.dataDir, r.member, p.session_id, watch)
-      lines.push(watchInstruction(cliPath()))
+      const how = watch.kind === 'lapsed' ? `Cortex comms: ${lapseText(ctx.dataDir, r.member, watch)}. ` : ''
+      lines.push(how + watchInstruction(cliPath()))
     } else if (event === 'UserPromptSubmit' && takeReminder(ctx.dataDir, r.member, p.session_id, watch)) {
       lines.push(
         watch.kind === 'lapsed'
-          ? `Cortex comms: your watcher stopped at ${new Date(watch.at).toISOString().slice(11, 16)}Z, so messages arrive only at prompts. ${watchInstruction(cliPath())}`
+          ? `Cortex comms: ${lapseText(ctx.dataDir, r.member, watch)}, so messages arrive only at prompts. ${watchInstruction(cliPath())}`
           : `Cortex comms: no watcher is running, so messages arrive only at prompts. ${watchInstruction(cliPath())}`,
       )
     }
@@ -91,12 +105,17 @@ export const handle = async (
 }
 
 /**
- * Stop: a comms member may not end a turn with no live watcher (19 Oct 2026:
+ * Stop: a comms member may not end a turn deaf after being told (19 Oct 2026:
  * "pause means no new work, never unreachable"). An instruction to re-arm was
  * not enough: a session woken by the watcher's own expiry notice decided to
  * leave it off. So the turn is held open with the re-arm instruction, at most
  * STOP_BLOCKS_PER_LAPSE times per lapse, so a session that cannot run Monitor
  * is never looped.
+ *
+ * Claude Code shows every hold as a hook error, so it is kept to the cases
+ * stopShouldHold names. A watcher that lapses during the turn is not held for:
+ * its Monitor-ended notice wakes the session and the prompt reminder tells it.
+ * A recent `cortex-role standdown` means the stop was chosen: nothing is held.
  *
  * A Monitor started late in the turn may not have written its state yet, so a
  * watcher that is not live is given a short grace before the verdict.
@@ -116,18 +135,26 @@ export const handleStop = async (
     const title = p.session_title?.trim()
     const member = title && local.member(title) ? title : local.sessionMember(p.session_id)
     if (!member || !local.member(member)) return undefined
+    const sd = standDown(ctx.dataDir, member)
+    if (sd && Date.now() - sd.at < STAND_DOWN_MS) return undefined
 
+    const promptAt = lastPromptAt(ctx.dataDir, member)
     let watch: WatchStatus = watchStatus(ctx.dataDir, member)
-    for (const until = Date.now() + graceMs; watch.kind !== 'live' && Date.now() < until; ) {
-      await new Promise((r) => setTimeout(r, 250))
-      watch = watchStatus(ctx.dataDir, member)
+    if (stopShouldHold(watch, promptAt)) {
+      for (const until = Date.now() + graceMs; watch.kind !== 'live' && Date.now() < until; ) {
+        await new Promise((r) => setTimeout(r, 250))
+        watch = watchStatus(ctx.dataDir, member)
+      }
     }
-    if (!takeStopBlock(ctx.dataDir, member, p.session_id, watch)) return comms ? await awaitsReminder(local, comms, member) : undefined
+    if (!stopShouldHold(watch, promptAt) || !takeStopBlock(ctx.dataDir, member, p.session_id, watch)) {
+      return comms ? await awaitsReminder(local, comms, member) : undefined
+    }
     const since = watch.kind === 'lapsed' ? ` since ${new Date(watch.at).toISOString().slice(11, 16)}Z` : ''
     return {
       decision: 'deny',
       reason:
-        `Cortex comms: ${member} has no live watcher${since}, so messages to it wait unseen. ` +
+        'Cortex reminder (not an error): re-arm your watcher. ' +
+        `${member} has no live watcher${since}, so messages to it wait unseen. ` +
         `Re-arm it now, before ending the turn; a pause means no new work, never unreachable. ${watchInstruction(cliPath())}`,
     }
   } catch (err) {

@@ -17,6 +17,7 @@
  *   claim <msg-id> | check <msg-id> | done <msg-id>
  *   move <from> <to> [--create] [--keep] change role, keep the name; an emptied role is deleted unless --keep
  *   watch                               one line per new message, for a Monitor
+ *   standdown                           record a deliberate watcher stop (before exit), then stop the Monitor
  *   who [words...]                      no words: everyone on the bus; words: who should handle them
  *   who --mesh [--live] [--json]        every role on every node, with its address; --live: reachable with a live member
  *   debug [on|off]                      verbose output: delivery status, liveness, recipients, claims
@@ -48,7 +49,15 @@ import { heldOutbound, rolelessHoldNote } from '../modules/comms/server/mesh/rou
 import { meshRoleLine, meshRoles } from '../modules/comms/server/meshWho.js'
 import { metaFor, openComms } from '../modules/comms/server/session.js'
 import type { Metadata } from '../modules/comms/server/types.js'
-import { recordWatch, takeReminder, watchStatus, WATCH_BEAT_MS, type WatchState } from '../modules/comms/server/watchState.js'
+import {
+  clearStandDown,
+  recordStandDown,
+  recordWatch,
+  takeReminder,
+  watchStatus,
+  WATCH_BEAT_MS,
+  type WatchState,
+} from '../modules/comms/server/watchState.js'
 import { watchInstruction } from '../modules/comms/server/hooks.js'
 import { cliPath } from '../modules/comms/server/session.js'
 import { isVerbose, setVerbose } from '../modules/comms/server/verbose.js'
@@ -59,7 +68,7 @@ import { exitOnHelp } from '../core/help.js'
 // send and reply carry message text: only the arguments before it can ask for help.
 exitOnHelp(
   `usage: cortex-role <command>
-  whoami | who [words...] | who --mesh [--live] [--json] | list | show <role> | inbox [--all] | watch
+  whoami | who [words...] | who --mesh [--live] [--json] | list | show <role> | inbox [--all] | watch | standdown
   join <role> [--create] [--as <name>] [--meta k=v,k=v] | leave <role> | move <from> <to> [--create] [--keep]
   create <role> | delete <role> | set k=v [k=v ...]
   send <to> <text...> [--notify] [--queue-anyway] [--body-file <path> | -] [--file <path>]...
@@ -392,19 +401,28 @@ try {
       console.log(`comms output: ${isVerbose(dir) ? 'verbose (delivery status, liveness, recipients, claim detail)' : 'normal'}`)
       break
     }
+    case 'standdown': {
+      // A Bash subprocess cannot stop the session's Monitor, so this records the choice and the session stops it.
+      const name = me()
+      recordStandDown(path.join(dataRoot(), 'comms'), { member: name, ...(sessionId ? { sessionId } : {}), at: Date.now() })
+      console.log('stood down; stop your watcher Monitor now (TaskStop)')
+      break
+    }
         case 'watch': {
       const name = me()
-      const deadline = Date.now() + 29 * 60_000
+      // Under the Monitor's 30-minute cap, so the window, not the cap's kill, is the routine end.
+      const deadline = Date.now() + (Number(process.env.CKN_WATCH_WINDOW_MS) || 29 * 60_000)
       let lastBeat = 0
       // Liveness for the hooks, keyed by member: they remind only when this
       // has actually stopped, and know a lapse from never having started.
       const commsDir = path.join(dataRoot(), 'comms')
       const state: WatchState = { member: name, pid: process.pid, startedAt: Date.now(), beatAt: Date.now() }
       recordWatch(commsDir, state)
-      const end = () => recordWatch(commsDir, { ...state, beatAt: Date.now(), endedAt: Date.now() })
+      clearStandDown(commsDir, name)
+      const end = (endedBy: WatchState['endedBy']) => recordWatch(commsDir, { ...state, beatAt: Date.now(), endedAt: Date.now(), endedBy })
       for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
         process.on(sig, () => {
-          end()
+          end('signal')
           process.exit(0)
         })
       }
@@ -449,7 +467,7 @@ try {
           console.error(`cortex-role watch: ${err instanceof Error ? err.message : String(err)}; retrying`)
         }
         if (Date.now() > deadline) {
-          end()
+          end('window')
           console.log('[comms] watch window ended; re-arm now: watchers stay on while paused or idle')
           break
         }

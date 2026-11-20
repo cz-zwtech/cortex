@@ -10,7 +10,7 @@ Every user-facing V1 feature, and what takes its place in V2. **Gone** means V2 
 - **Messages go to roles, not sessions.** A session joins a role (`cortex-role join`) to receive messages, and work messages carry claims, so two members never act on the same one.
 - **The private mind syncs through a central node, not a git remote.** It carries journal records over the mesh, is off until enabled, and keeps working detail (threads, workflows) on the machine that wrote it, sending only a pointer.
 - **No session-end extraction through the Anthropic API.** V2 never needs an API key. Optional nightly consolidation uses headless `claude -p` on your subscription, and is off by default.
-- **Hooks can push back.** A standing rule with `enforce: deny` refuses a tool call; only a person at a terminal can lift it (`cortex-rules allow`). The Stop hook can send a turn back once: when a stated lesson was not recorded, when the reply asks you a fact memory holds, or when outgoing text breaks a deny rule.
+- **Hooks can push back.** A standing rule with `enforce: deny` refuses a tool call; only a person at a terminal can lift it (`cortex-rules allow`). The Stop hook sends a turn back once when outgoing text breaks a deny rule, and holds it for a re-arm when a comms member was told its watcher is down and did not restart it (`cortex-role standdown` before an exit lifts that). A stated lesson that was not recorded, or a closing question memory can answer, is not held: the reminder comes with the next prompt. Claude Code labels every hold a hook error; Cortex's reasons open with "Cortex reminder (not an error)".
 - **The status line bus dot means something new.** Green means the session is a member of a role with a live watcher. V1's dots are no longer recognised. The status line needs `jq`.
 
 ## CLI scripts
@@ -51,7 +51,7 @@ Every user-facing V1 feature, and what takes its place in V2. **Gone** means V2 
 
 | V1 | V2 | Status |
 |---|---|---|
-| `/cortex-snapshot` | write a memory file as usual: it is taken in at once. The Stop hook makes sure a stated lesson gets recorded | partial |
+| `/cortex-snapshot` | write a memory file as usual: it is taken in at once. A stated lesson that was not recorded is raised at the next prompt | partial |
 | `/cortex-sync` | `/cortex-memory sweep`; private mind syncs by itself (CLI: `cortex-mind sync`) | replaced |
 | `/cortex-sync-shared` | none | **gone** |
 | `/cortex-rename` | `/cortex-rename <name> [role]` | replaced |

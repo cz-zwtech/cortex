@@ -9,7 +9,7 @@ import { handle, handleStop } from '../server/hooks.js'
 import { Comms } from '../server/comms.js'
 import { LocalIdentity } from '../server/identity.js'
 import { MemoryTransport } from '../server/transport.js'
-import { recordWatch, STOP_BLOCKS_PER_LAPSE, takeReminder, watchStatus, WATCH_STALE_MS } from '../server/watchState.js'
+import { recordPrompt, recordWatch, STOP_BLOCKS_PER_LAPSE, takeReminder, watchStatus, WATCH_STALE_MS } from '../server/watchState.js'
 import { isolatedEnv } from '../../../test/isolatedEnv.js'
 
 const REPO = path.resolve(import.meta.dirname, '..', '..', '..')
@@ -132,7 +132,7 @@ test('join creates a missing role without --create, and says which happened', ()
   assert.match(second.stdout, /^joined role docs as docs-1/m)
 })
 
-test('STOP: a member with no live watcher cannot end the turn; the hold is bounded per lapse; a live watcher passes', async () => {
+test('STOP: a member told its watcher is down cannot end the turn; the hold is bounded per lapse; a live watcher passes', async () => {
   const dir = tmp()
   const { local } = await member(dir)
   const open = () => ({ local })
@@ -141,10 +141,11 @@ test('STOP: a member with no live watcher cannot end the turn; the hold is bound
   // The expiry case: the watch ended (the Monitor window closed) and the woken session declines to re-arm.
   const t0 = Date.now()
   recordWatch(dir, { member: 'crew1', pid: 1, startedAt: t0 - 60_000, beatAt: t0 - 1000, endedAt: t0 - 500 })
+  recordPrompt(dir, 'crew1', t0)
   for (let i = 0; i < STOP_BLOCKS_PER_LAPSE; i++) {
     const r = (await stop()) as { decision: string; reason: string }
     assert.equal(r.decision, 'deny', `held ${i + 1}`)
-    assert.match(r.reason, /crew1 has no live watcher since .*Re-arm it now.*never unreachable.*watch" and timeout_ms 1800000/)
+    assert.match(r.reason, /^Cortex reminder \(not an error\): re-arm your watcher\. crew1 has no live watcher since .*Re-arm it now.*never unreachable.*watch" and timeout_ms 1800000/)
   }
   assert.equal(await stop(), undefined, 'bounded: a session that cannot run Monitor is not looped')
 
@@ -152,8 +153,9 @@ test('STOP: a member with no live watcher cannot end the turn; the hold is bound
   recordWatch(dir, { member: 'crew1', pid: 2, startedAt: Date.now(), beatAt: Date.now() })
   assert.equal(await stop(), undefined)
 
-  // The next lapse is held again.
+  // The next lapse is held again, once a prompt has told the session about it.
   recordWatch(dir, { member: 'crew1', pid: 2, startedAt: Date.now(), beatAt: Date.now(), endedAt: Date.now() + 1 })
+  recordPrompt(dir, 'crew1', Date.now() + 2)
   assert.equal(((await stop()) as { decision: string }).decision, 'deny')
 })
 

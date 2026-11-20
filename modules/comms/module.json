@@ -68,6 +68,7 @@
     "test/comms.test.ts",
     "test/session.test.ts",
     "test/watch.test.ts",
+    "test/stop-holds.test.ts",
     "test/external.test.ts",
     "test/move.test.ts",
     "test/directory.test.ts",
