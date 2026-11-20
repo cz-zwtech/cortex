@@ -91,6 +91,11 @@
     },
     {
       "event": "UserPromptSubmit",
+      "handler": "server/on-prompt-reminders.ts",
+      "order": 18
+    },
+    {
+      "event": "UserPromptSubmit",
       "handler": "server/on-prompt-target.ts",
       "order": 25
     },
@@ -179,7 +184,8 @@
     "test/sync-seams.test.ts",
     "test/update.test.ts",
     "test/retire.test.ts",
-    "test/duplicates-cli.test.ts"
+    "test/duplicates-cli.test.ts",
+    "test/stop-reminders.test.ts"
   ],
   "claudeImports": [
     "rules.md"

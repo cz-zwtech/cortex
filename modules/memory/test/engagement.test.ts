@@ -211,15 +211,16 @@ test('F5: only a closing factual question counts; decisions and answered questio
   assert.equal(closingQuestion('Done.\n```\nwho am i?\n```'), null)
 })
 
-test('F5 replay: asking who runs marketing goes back once with the roster', async () => {
+test('F5 replay: asking who runs marketing leaves the roster for the next prompt', async () => {
   const { default: onStopAsk } = await import('../server/on-stop-ask.js')
+  const { default: onPromptReminders } = await import('../server/on-prompt-reminders.js')
   const { ctx, dataDir } = fixture()
   const reply = 'I put marketing on slide 3 of the deck.\n\nWho runs marketing at Acme, so I can name them?'
-  const r = onStopAsk({ session_id: 'a1', last_assistant_message: reply }, ctx) as { decision?: string; reason?: string }
-  assert.equal(r?.decision, 'deny', 'Stop turns a deny into decision: block')
-  assert.match(r.reason!, /\| CMO \| Dana Quill \|/)
-  assert.equal(onStopAsk({ session_id: 'a1', last_assistant_message: reply, stop_hook_active: true }, ctx), undefined, 'never twice')
-  assert.equal(onStopAsk({ session_id: 'a1', last_assistant_message: 'What time is your flight tomorrow?' }, ctx), undefined, 'memory has nothing: ask')
+  assert.equal(onStopAsk({ session_id: 'a1', last_assistant_message: reply }, ctx), undefined, 'never held at Stop')
+  const next = onPromptReminders({ session_id: 'a1', prompt: 'go on' }, ctx) as { additionalContext?: string }
+  assert.match(next.additionalContext!, /\| CMO \| Dana Quill \|/)
+  assert.equal(onStopAsk({ session_id: 'a2', last_assistant_message: 'What time is your flight tomorrow?' }, ctx), undefined)
+  assert.equal(onPromptReminders({ session_id: 'a2', prompt: 'go on' }, ctx), undefined, 'memory has nothing: ask')
   assert.ok(logRows(dataDir).some((row: { event: string }) => row.event === 'ask'))
 })
 

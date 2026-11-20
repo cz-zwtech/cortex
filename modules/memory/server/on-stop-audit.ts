@@ -8,7 +8,9 @@ import type { Rule } from './rules.js'
 /**
  * Stop: a reply the user will paste (the turn's prompt named an external target):
  * logged against the rules, and sent back once when it breaks a deny rule.
- * stop_hook_active marks the rewrite, which passes.
+ * stop_hook_active marks the rewrite, which passes. This one still holds the
+ * turn, since the text would otherwise go out; the reason says it is a reminder,
+ * because Claude Code labels every hold a hook error.
  */
 export default (payload: unknown, ctx: ModuleCtx) => {
   try {
@@ -26,7 +28,7 @@ export default (payload: unknown, ctx: ModuleCtx) => {
     const { denied } = judgeOutbound(text, rules, () => false)
     if (!denied.length) return undefined
     for (const d of denied) appendFire(fires, { at: Date.now(), rule: d.rule.name, ...(p.session_id ? { session: p.session_id } : {}), event: 'Stop', what, findings: d.found.length, outcome: 'denied' })
-    return { decision: 'deny' as const, reason: deniedReason(denied, `this ${what}`) }
+    return { decision: 'deny' as const, reason: `Cortex reminder (not an error): ${deniedReason(denied, `this ${what}`)}` }
   } catch (err) {
     ctx.log(`rule audit skipped: ${err instanceof Error ? err.message : String(err)}`)
   }

@@ -129,23 +129,25 @@ test('lesson gate: finds a stated lesson, not a quoted one', async () => {
   assert.equal(statedLesson('All 481 tests pass; the deck is ready.'), null)
 })
 
-test('lesson gate: the turn goes back once unless a rule or feedback memory was written, or a commit is cited', async () => {
+test('lesson gate: the next prompt is reminded unless a rule or feedback memory was written, or a commit is cited', async () => {
   const { default: onStopLesson } = await import('../server/on-stop-lesson.js')
   const { sweep } = await import('../server/sweep.js')
   const { Journal } = await import('../server/journal.js')
+  const { takeReminders } = await import('../server/pendingReminders.js')
   const { fixture } = await import('./engagement-fixture.js')
   const { store, ctx, dataDir } = fixture()
   const reply = 'Merged. Noted, I will not append to stub files again.'
-  const stop = (over: Record<string, unknown> = {}) =>
-    onStopLesson({ session_id: 'L1', last_assistant_message: reply, ...over }, ctx) as { decision?: string; reason?: string } | undefined
+  const stop = (over: Record<string, unknown> = {}) => onStopLesson({ session_id: 'L1', last_assistant_message: reply, ...over }, ctx)
+  const reminded = (session = 'L1') => takeReminders(dataDir, session).join('\n')
 
-  const bounced = stop()!
-  assert.equal(bounced.decision, 'deny')
-  assert.match(bounced.reason!, /kind: rule/)
-  assert.match(bounced.reason!, /enforce: remind, audit, or deny/)
-  assert.equal(stop({ stop_hook_active: true }), undefined, 'never twice')
-  assert.equal(stop({ agent_id: 'sub' }), undefined, 'not subagents')
-  assert.equal(stop({ last_assistant_message: `${reply} The fix is commit 0753cc9.` }), undefined, 'a mechanism fix, cited')
+  assert.equal(stop(), undefined, 'never held at Stop')
+  const said = reminded()
+  assert.match(said, /kind: rule/)
+  assert.match(said, /enforce: remind, audit, or deny/)
+  stop({ stop_hook_active: true })
+  stop({ agent_id: 'sub' })
+  stop({ last_assistant_message: `${reply} The fix is commit 0753cc9.` })
+  assert.equal(reminded(), '', 'not a continuation, a subagent, or a cited mechanism fix')
 
   const memoryDir = fs.mkdtempSync(path.join(dataDir, 'mem-'))
   fs.writeFileSync(
@@ -153,8 +155,10 @@ test('lesson gate: the turn goes back once unless a rule or feedback memory was 
     '---\nname: memory-update-rewrite-not-append\nkind: rule\nwhy: appended text below a stub became a stray memory\nwhen: path:**/memory/*.md\ndo: rewrite the whole memory; never append below a stub\nenforce: remind\n---\n\nRewrite, never append.\n',
   )
   sweep({ memoryDir, scope: 'user', machine: 'node-a', sessionId: 'L1' }, { store, journal: new Journal({ dir: path.join(dataDir, 'journal'), machine: 'node-a' }) })
-  assert.equal(stop(), undefined, 'the rule was written this session')
-  assert.equal(stop({ session_id: 'L2' })?.decision, 'deny', 'another session wrote nothing')
+  stop()
+  assert.equal(reminded(), '', 'the rule was written this session')
+  stop({ session_id: 'L2' })
+  assert.match(reminded('L2'), /stated a lesson/, 'another session wrote nothing')
 })
 
 // ── C: rules that fired and were broken anyway ─────────────────────────────

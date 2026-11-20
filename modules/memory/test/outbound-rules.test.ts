@@ -87,6 +87,7 @@ test('Stop: a reply for an external target that breaks a deny rule goes back onc
   noteTarget(dataDir, 't1', 'draft a slack message to the client about revenue')
   const r = stop('Revenue is up — a lot.')!
   assert.equal(r.decision, 'deny')
+  assert.match(r.reason!, /^Cortex reminder \(not an error\): /)
   assert.match(r.reason!, /this chat reply for .*no-dashes/s)
   noteTarget(dataDir, 't1', 'draft a slack message to the client about revenue')
   assert.equal(stop('Revenue is up — a lot.', { stop_hook_active: true }), undefined, 'the rewrite passes')
